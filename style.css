@@ -1,0 +1,187 @@
+:root {
+  --bg-main: #0f1419;
+  --bg-panel: #161c22;
+  --bg-card: #1d242c;
+  --bg-hover: #222b34;
+
+  --text-primary: #e6edf3;
+  --text-secondary: #9aa6b2;
+
+  --accent: #2ecc71;
+  --border: #2a333d;
+}
+
+/* ================= GLOBAL ================= */
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: var(--bg-main);
+  color: var(--text-primary);
+}
+
+/* Kill default Leaflet routing UI completely */
+.leaflet-routing-container,
+.leaflet-routing-alt {
+  display: none !important;
+}
+
+/* ================= LAYOUT ================= */
+
+.planner-layout {
+  display: flex;
+  height: 100vh;
+}
+
+#map {
+  flex: 1;
+}
+
+#sidebar {
+  width: 340px;
+  padding: 18px;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+/* ================= ROUTE INFO ================= */
+
+.route-info {
+  background: var(--bg-card);
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+/* ================= WAYPOINT CARDS ================= */
+
+.wp-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  transition: box-shadow 0.2s ease;
+}
+
+.wp-item:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+
+/* Header (always visible) */
+.wp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wp-header:hover {
+  background: var(--bg-hover);
+}
+
+/* Inline segment selector */
+.segment-select {
+  background: #11161b;
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.segment-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Collapsible content */
+.wp-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s ease, padding 0.25s ease;
+  padding: 0 14px;
+}
+
+/* Expanded state */
+.wp-item.expanded .wp-content {
+  max-height: 500px;
+  padding: 14px;
+}
+
+/* Inputs inside waypoint */
+.wp-content label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.wp-content input,
+.wp-content textarea {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #11161b;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.wp-content input:focus,
+.wp-content textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ================= FLOATING DIRECTIONS ================= */
+
+.floating-directions {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  width: 320px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  overflow: hidden;
+  z-index: 1000;
+}
+
+.floating-header {
+  padding: 12px 14px;
+  cursor: pointer;
+  font-weight: 600;
+  background: var(--bg-hover);
+  display: flex;
+  justify-content: space-between;
+}
+
+.floating-content {
+  max-height: 350px;
+  overflow-y: auto;
+  padding: 12px 14px;
+  font-size: 13px;
+}
+
+.floating-directions.collapsed .floating-content {
+  display: none;
+}
+
+.direction-step {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.direction-step:last-child {
+  border-bottom: none;
+}
+
+.direction-step small {
+  color: var(--text-secondary);
+}

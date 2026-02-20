@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Adventure Planner</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+
+<div class="planner-layout">
+
+  <div id="map"></div>
+
+  <div id="sidebar">
+    <h3>Route Info</h3>
+    <div id="routeInfo" class="route-info">
+      Total Distance: –
+    </div>
+
+    <h3>Waypoints</h3>
+    <div id="waypointList"></div>
+  </div>
+
+</div>
+
+<div id="floatingDirections" class="floating-directions collapsed">
+  <div class="floating-header" onclick="toggleDirections()">
+    Directions <span id="dirArrow">▲</span>
+  </div>
+  <div class="floating-content">
+    <div id="directionsList">No route yet.</div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+
+<script>
+
+/* ================= MAP ================= */
+
+var map = L.map('map').setView([48.2, 14.3], 10);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+
+/* ================= STATE ================= */
+
+var waypoints = [];
+var waypointCounter = 1;
+var segmentLayers = [];
+
+
+/* ================= ADD WAYPOINT ================= */
+
+map.on('click', function(e) {
+
+  waypoints.push({
+    latlng: e.latlng,
+    name: "Waypoint " + waypointCounter,
+    url: "",
+    notes: ""
+  });
+
+  waypointCounter++;
+  renderSidebar();
+  updateRouting();
+});
+
+
+/* ================= ROUTING ================= */
+
+function updateRouting() {
+
+  segmentLayers.forEach(layer => {
+    if (layer instanceof L.Routing.Control) {
+      layer.remove();
+    } else {
+      map.removeLayer(layer);
+    }
+  });
+
+  segmentLayers = [];
+
+  let totalDistance = 0;
+  let allInstructions = [];
+  let pendingRoadSegments = 0;
+
+  if (waypoints.length < 2) {
+    document.getElementById("routeInfo").innerHTML =
+      "Total Distance: –";
+    document.getElementById("directionsList").innerHTML =
+      "No route yet.";
+    return;
+  }
+
+  for (let i = 0; i < waypoints.length - 1; i++) {
+
+    const wp1 = waypoints[i];
+    const wp2 = waypoints[i+1];
+
+    const select = document.getElementById("segmentMode_" + i);
+    const mode = select ? select.value : "road";
+
+    if (mode === "road") {
+
+      pendingRoadSegments++;
+
+      const control = L.Routing.control({
+        waypoints: [wp1.latlng, wp2.latlng],
+        router: L.Routing.osrmv1({
+          serviceUrl: 'https://router.project-osrm.org/route/v1'
+        }),
+        addWaypoints: false,
+        draggableWaypoints: false,
+        show: false,
+        createMarker: function() { return null; },
+        lineOptions: {
+          styles: [{ color: '#e74c3c', weight: 4 }]
+        }
+      }).addTo(map);
+
+      segmentLayers.push(control);
+
+      control.on('routesfound', function(e) {
+
+        const route = e.routes[0];
+
+        totalDistance += route.summary.totalDistance;
+        allInstructions = allInstructions.concat(route.instructions);
+
+        pendingRoadSegments--;
+
+        if (pendingRoadSegments === 0) {
+          updateRouteInfo(totalDistance);
+          renderDirections(allInstructions);
+        }
+      });
+
+    } else {
+
+      const line = L.polyline(
+        [wp1.latlng, wp2.latlng],
+        {
+          color: '#2ecc71',
+          weight: 4,
+          dashArray: '6,6'
+        }
+      ).addTo(map);
+
+      segmentLayers.push(line);
+
+      const dist = wp1.latlng.distanceTo(wp2.latlng);
+      totalDistance += dist;
+
+      allInstructions.push({
+        text: "Direct segment (hike/off-road)",
+        distance: dist
+      });
+    }
+  }
+
+  if (pendingRoadSegments === 0) {
+    updateRouteInfo(totalDistance);
+    renderDirections(allInstructions);
+  }
+}
+
+function updateRouteInfo(distanceMeters) {
+  const km = (distanceMeters / 1000).toFixed(2);
+  document.getElementById("routeInfo").innerHTML =
+    "Total Distance: " + km + " km";
+}
+
+
+/* ================= SIDEBAR ================= */
+
+function renderSidebar() {
+
+  const container = document.getElementById("waypointList");
+  container.innerHTML = "";
+
+  waypoints.forEach((wp, index) => {
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "wp-item";
+
+    let segmentControl = "";
+
+    if (index < waypoints.length - 1) {
+      segmentControl =
+        "<select class='segment-select' id='segmentMode_" + index + "' onchange='updateRouting()'>" +
+        "<option value='road'>🚗 Road</option>" +
+        "<option value='direct'>🥾 Direct</option>" +
+        "</select>";
+    }
+
+    wrapper.innerHTML =
+      "<div class='wp-header' onclick='toggleWaypoint(" + index + ")'>" +
+        "<span>" + wp.name + "</span>" +
+        segmentControl +
+      "</div>" +
+
+      "<div class='wp-content'>" +
+        "<label>Name:</label>" +
+        "<input value='" + wp.name + "' onchange='editName(" + index + ", this.value)' /><br>" +
+
+        "<label>URL:</label>" +
+        "<input value='" + wp.url + "' onchange='editUrl(" + index + ", this.value)' /><br>" +
+
+        "<label>Notes:</label>" +
+        "<textarea rows='2' onchange='editNotes(" + index + ", this.value)'>" +
+        wp.notes +
+        "</textarea>" +
+      "</div>";
+
+    container.appendChild(wrapper);
+  });
+}
+
+function toggleWaypoint(index) {
+  const cards = document.querySelectorAll('.wp-item');
+  cards[index].classList.toggle('expanded');
+}
+
+function editName(index, value) {
+  waypoints[index].name = value;
+  renderSidebar();
+}
+
+function editUrl(index, value) {
+  waypoints[index].url = value;
+}
+
+function editNotes(index, value) {
+  waypoints[index].notes = value;
+}
+
+
+/* ================= DIRECTIONS ================= */
+
+function renderDirections(instructions) {
+
+  const container = document.getElementById("directionsList");
+  container.innerHTML = "";
+
+  instructions.forEach(step => {
+
+    const div = document.createElement("div");
+    div.className = "direction-step";
+
+    div.innerHTML =
+      "<div>" + step.text + "</div>" +
+      "<small>" + (step.distance / 1000).toFixed(2) + " km</small>";
+
+    container.appendChild(div);
+  });
+}
+
+function toggleDirections() {
+  const panel = document.getElementById("floatingDirections");
+  const arrow = document.getElementById("dirArrow");
+
+  panel.classList.toggle("collapsed");
+  arrow.textContent =
+    panel.classList.contains("collapsed") ? "▲" : "▼";
+}
+
+</script>
+
+</body>
+</html>
