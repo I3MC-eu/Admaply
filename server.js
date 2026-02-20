@@ -35,6 +35,8 @@ async function ensureStore() {
 async function readStore() {
   await ensureStore();
   return JSON.parse(await fs.readFile(STORE_FILE, 'utf8'));
+  const raw = await fs.readFile(STORE_FILE, 'utf8');
+  return JSON.parse(raw);
 }
 
 async function writeStore(store) {
@@ -56,8 +58,10 @@ function parseCookies(req) {
 }
 
 function getSessionUser(req) {
-  const sid = parseCookies(req).sid;
-  return sid ? sessions.get(sid) || null : null;
+  const cookies = parseCookies(req);
+  const sid = cookies.sid;
+  if (!sid) return null;
+  return sessions.get(sid) || null;
 }
 
 function createSession(username) {
@@ -80,54 +84,13 @@ async function readJsonBody(req) {
 }
 
 function isPathSafe(filePath) {
-  return path.resolve(filePath).startsWith(path.resolve(ROOT));
+  const resolved = path.resolve(filePath);
+  return resolved.startsWith(path.resolve(ROOT));
 }
 
-function normalizeWaypoint(waypoint, index) {
-  const rawLinks = Array.isArray(waypoint.links)
-    ? waypoint.links
-    : (waypoint.url ? [waypoint.url] : []);
-  const rawNotes = Array.isArray(waypoint.notes)
-    ? waypoint.notes
-    : (typeof waypoint.notes === 'string' && waypoint.notes.trim() ? [waypoint.notes] : []);
-
-  const links = rawLinks
-    .map((value) => String(value || '').trim())
-    .filter(Boolean);
-
-  const notes = rawNotes
-    .map((value) => String(value || '').trim())
-    .filter(Boolean);
-
-  return {
-    lat: Number(waypoint.lat),
-    lng: Number(waypoint.lng),
-    name: String(waypoint.name || `Waypoint ${index + 1}`),
-    links,
-    notes
-  };
-}
-
-
-function normalizeSegmentModes(segmentModes, waypointCount) {
-  const needed = Math.max(waypointCount - 1, 0);
-  const raw = Array.isArray(segmentModes) ? segmentModes : [];
-  return Array.from({ length: needed }, (_, index) => (raw[index] === 'hike' ? 'hike' : 'road'));
-}
-
-function summarizeRoute(route) {
-  return {
-    id: route.id,
-    name: route.name,
-    createdAt: route.createdAt,
-    waypointCount: route.waypoints.length,
-    waypoints: route.waypoints,
-    segmentModes: normalizeSegmentModes(route.segmentModes, route.waypoints.length)
-  };
-}
-
-async function serveStatic(pathname, res) {
-  const safePath = path.normalize(decodeURIComponent(pathname === '/' ? '/index.html' : pathname)).replace(/^\/+/, '');
+async function serveStatic(req, res) {
+  const pathname = req.url === '/' ? '/index.html' : req.url;
+  const safePath = path.normalize(decodeURIComponent(pathname)).replace(/^\/+/, '');
   const filePath = path.join(ROOT, safePath);
 
   if (!isPathSafe(filePath)) {
@@ -140,9 +103,11 @@ async function serveStatic(pathname, res) {
     const stat = await fs.stat(filePath);
     if (!stat.isFile()) throw new Error('not-file');
 
-    const contentType = MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+    const ext = path.extname(filePath).toLowerCase();
+    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+    const data = await fs.readFile(filePath);
     res.writeHead(200, { 'Content-Type': contentType });
-    res.end(await fs.readFile(filePath));
+    res.end(data);
   } catch {
     res.writeHead(404);
     res.end('Not found');
@@ -150,24 +115,27 @@ async function serveStatic(pathname, res) {
 }
 
 async function handler(req, res) {
-  const url = new URL(req.url, 'http://localhost');
-  const { pathname } = url;
-
-  if (pathname === '/api/session' && req.method === 'GET') {
+  if (req.url === '/api/session' && req.method === 'GET') {
     const user = getSessionUser(req);
-    return sendJson(res, 200, user ? { loggedIn: true, user } : { loggedIn: false });
+    if (!user) return sendJson(res, 200, { loggedIn: false });
+    return sendJson(res, 200, { loggedIn: true, user });
   }
 
-  if (pathname === '/api/login' && req.method === 'POST') {
+  if (req.url === '/api/login' && req.method === 'POST') {
     const body = await readJsonBody(req);
     if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
 
     const { username, password } = body;
-    if (!username || !password) return sendJson(res, 400, { error: 'Username and password are required' });
+    if (!username || !password) {
+      return sendJson(res, 400, { error: 'Username and password are required' });
+    }
 
     const store = await readStore();
     const user = store.users.find((entry) => entry.username === username && entry.password === password);
-    if (!user) return sendJson(res, 401, { error: 'Invalid credentials' });
+
+    if (!user) {
+      return sendJson(res, 401, { error: 'Invalid credentials' });
+    }
 
     const sid = createSession(user.username);
     return sendJson(
@@ -178,71 +146,59 @@ async function handler(req, res) {
     );
   }
 
-  if (pathname === '/api/logout' && req.method === 'POST') {
-    const sid = parseCookies(req).sid;
-    if (sid) sessions.delete(sid);
+  if (req.url === '/api/logout' && req.method === 'POST') {
+    const cookies = parseCookies(req);
+    if (cookies.sid) sessions.delete(cookies.sid);
     return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' });
   }
 
-  if (pathname.startsWith('/api/routes')) {
+  if (req.url === '/api/routes/latest' && req.method === 'GET') {
     const user = getSessionUser(req);
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
 
     const store = await readStore();
     const userRoutes = store.routes[user.username] || [];
-
-    if (pathname === '/api/routes/latest' && req.method === 'GET') {
-      const latest = userRoutes[userRoutes.length - 1] || null;
-      if (!latest) return sendJson(res, 200, { route: null });
-      return sendJson(res, 200, { route: { ...latest, segmentModes: normalizeSegmentModes(latest.segmentModes, latest.waypoints.length) } });
-    }
-
-    if (pathname === '/api/routes' && req.method === 'GET') {
-      const routes = userRoutes.slice().reverse().map(summarizeRoute);
-      return sendJson(res, 200, { routes });
-    }
-
-    if (pathname === '/api/routes' && req.method === 'POST') {
-      const body = await readJsonBody(req);
-      if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
-
-      const { waypoints, name, segmentModes } = body;
-      if (!Array.isArray(waypoints) || waypoints.length < 2) {
-        return sendJson(res, 400, { error: 'At least 2 waypoints are required' });
-      }
-
-      const cleanWaypoints = waypoints.map(normalizeWaypoint);
-      const hasInvalidCoords = cleanWaypoints.some((wp) => Number.isNaN(wp.lat) || Number.isNaN(wp.lng));
-      if (hasInvalidCoords) {
-        return sendJson(res, 400, { error: 'Waypoints must contain valid lat/lng values' });
-      }
-
-      const trimmedName = String(name || '').trim();
-      const entry = {
-        id: Date.now(),
-        name: trimmedName || `Route ${userRoutes.length + 1}`,
-        createdAt: new Date().toISOString(),
-        waypoints: cleanWaypoints,
-        segmentModes: normalizeSegmentModes(segmentModes, cleanWaypoints.length)
-      };
-
-      store.routes[user.username] = userRoutes;
-      store.routes[user.username].push(entry);
-      await writeStore(store);
-      return sendJson(res, 200, { ok: true, route: entry });
-    }
-
-    if (pathname.startsWith('/api/routes/') && req.method === 'GET') {
-      const routeId = Number(pathname.split('/').pop());
-      if (Number.isNaN(routeId)) return sendJson(res, 400, { error: 'Invalid route id' });
-
-      const route = userRoutes.find((entry) => entry.id === routeId) || null;
-      if (!route) return sendJson(res, 404, { error: 'Route not found' });
-      return sendJson(res, 200, { route: { ...route, segmentModes: normalizeSegmentModes(route.segmentModes, route.waypoints.length) } });
-    }
+    const latest = userRoutes[userRoutes.length - 1] || null;
+    return sendJson(res, 200, { route: latest });
   }
 
-  return serveStatic(pathname, res);
+  if (req.url === '/api/routes' && req.method === 'POST') {
+    const user = getSessionUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+
+    const body = await readJsonBody(req);
+    if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
+
+    const { waypoints, name } = body;
+    if (!Array.isArray(waypoints) || waypoints.length === 0) {
+      return sendJson(res, 400, { error: 'Waypoints are required' });
+    }
+
+    const cleanWaypoints = waypoints.map((waypoint) => ({
+      lat: Number(waypoint.lat),
+      lng: Number(waypoint.lng),
+      name: String(waypoint.name || ''),
+      url: String(waypoint.url || ''),
+      notes: String(waypoint.notes || '')
+    }));
+
+    const store = await readStore();
+    store.routes[user.username] = store.routes[user.username] || [];
+
+    const entry = {
+      id: Date.now(),
+      name: name || `Route ${store.routes[user.username].length + 1}`,
+      createdAt: new Date().toISOString(),
+      waypoints: cleanWaypoints
+    };
+
+    store.routes[user.username].push(entry);
+    await writeStore(store);
+
+    return sendJson(res, 200, { ok: true, route: entry });
+  }
+
+  return serveStatic(req, res);
 }
 
 const server = http.createServer((req, res) => {
