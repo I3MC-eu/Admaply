@@ -8,20 +8,127 @@
 </head>
 <body>
 
-<div class="fullscreen-center">
-  <div class="center-card">
-    <h2>Welcome Back</h2>
-    <p>Your route planning hub</p>
+<div class="home-shell">
+  <div class="home-header-card">
+    <div>
+      <h2>Welcome Back</h2>
+      <p id="welcomeText">Your route planning hub</p>
+    </div>
 
-    <button onclick="window.location.href='planner.html'">
-      Open Planner
-    </button>
+    <div class="home-actions">
+      <button onclick="window.location.href='planner.html'">Create New Route</button>
+      <button class="secondary-btn" id="logoutBtn">Logout</button>
+    </div>
+  </div>
 
-    <br><br>
-
-    <a href="index.html">Logout</a>
+  <div class="home-routes-card">
+    <h3>Saved Routes</h3>
+    <p class="muted">Pick one to reopen it in the planner.</p>
+    <div id="routeList" class="saved-route-list"></div>
   </div>
 </div>
+
+<script>
+function formatDate(value) {
+  return new Date(value).toLocaleString();
+}
+
+function buildRouteMiniMap(waypoints) {
+  if (!Array.isArray(waypoints) || waypoints.length < 2) {
+    return '<div class="mini-map-empty">No preview</div>';
+  }
+
+  const width = 220;
+  const height = 120;
+  const pad = 14;
+
+  const lats = waypoints.map((wp) => wp.lat);
+  const lngs = waypoints.map((wp) => wp.lng);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+
+  const latSpan = Math.max(maxLat - minLat, 0.0001);
+  const lngSpan = Math.max(maxLng - minLng, 0.0001);
+
+  const points = waypoints.map((wp) => {
+    const x = pad + ((wp.lng - minLng) / lngSpan) * (width - pad * 2);
+    const y = height - pad - ((wp.lat - minLat) / latSpan) * (height - pad * 2);
+    return { x, y };
+  });
+
+  const polyline = points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const dots = points.map((p, index) => {
+    const color = index === 0 ? '#2ecc71' : (index === points.length - 1 ? '#e67e22' : '#9aa6b2');
+    return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="${color}" />`;
+  }).join('');
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="mini-map" role="img" aria-label="Route preview map">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="#11161b"></rect>
+      <polyline points="${polyline}" fill="none" stroke="#2ecc71" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      ${dots}
+    </svg>
+  `;
+}
+
+function renderRoutes(routes) {
+  const container = document.getElementById('routeList');
+
+  if (!routes.length) {
+    container.innerHTML = '<p class="muted">No routes saved yet. Create one in the planner.</p>';
+    return;
+  }
+
+  container.innerHTML = routes.map((route) => `
+    <div class="saved-route-card">
+      <div>
+        <h4>${route.name}</h4>
+        <p>${route.waypointCount} waypoints • ${formatDate(route.createdAt)}</p>
+        <button class="secondary-btn" onclick="openRoute(${route.id})">Open Route</button>
+      </div>
+      ${buildRouteMiniMap(route.waypoints)}
+    </div>
+  `).join('');
+}
+
+function openRoute(routeId) {
+  window.location.href = `planner.html?routeId=${routeId}`;
+}
+
+async function loadSessionAndRoutes() {
+  const sessionRes = await fetch('/api/session');
+  const sessionData = await sessionRes.json();
+
+  if (!sessionData.loggedIn) {
+    window.location.href = 'index.html';
+    return;
+  }
+
+  document.getElementById('welcomeText').textContent =
+    `Signed in as ${sessionData.user.username}`;
+
+  const routeRes = await fetch('/api/routes');
+  const routeData = await routeRes.json();
+
+  if (!routeRes.ok) {
+    document.getElementById('routeList').innerHTML =
+      `<p class="muted">${routeData.error || 'Failed to load saved routes.'}</p>`;
+    return;
+  }
+
+  renderRoutes(routeData.routes || []);
+}
+
+async function logout() {
+  await fetch('/api/logout', { method: 'POST' });
+  window.location.href = 'index.html';
+}
+
+document.getElementById('logoutBtn').addEventListener('click', logout);
+loadSessionAndRoutes();
+</script>
 
 </body>
 </html>
