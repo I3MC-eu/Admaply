@@ -4,6 +4,11 @@ AdMaply is a lightweight adventure planning platform that helps you map, organiz
 Live under: </br>
 https://admaply.i3mc.fun/
 
+## 🔐 Demo Credentials
+  
+  Email: demo@admaply.local </br>
+  Password: demo123
+
 ---
 
 ## 🚀 Features
@@ -59,13 +64,3 @@ To deploy via CapRover, upload a `.tar` archive containing:
 - application source files
 
 Make sure these files are at the root of the archive (not inside another folder).
-
----
-
-## 🔐 Demo Credentials
-  
-  Email: demo@admaply.local </br>
-  Password: demo123
-
-  
-
