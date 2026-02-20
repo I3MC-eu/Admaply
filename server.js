@@ -152,10 +152,11 @@ function normalizeWaypoint(waypoint, index) {
 
   const linkItems = rawLinkItems
     .map((item) => ({
+      image: String((item && item.image) || '').trim(),
       url: String((item && item.url) || '').trim(),
       info: String((item && item.info) || '').trim()
     }))
-    .filter((item) => item.url || item.info);
+    .filter((item) => item.image || item.url || item.info);
 
   const links = linkItems.length > 0
     ? linkItems.map((item) => item.url).filter(Boolean)

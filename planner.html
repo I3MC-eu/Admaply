@@ -248,10 +248,18 @@ function renderSidebar() {
 
     const linkItems = Array.isArray(wp.linkItems) ? wp.linkItems : [];
     const linksHtml = linkItems.map((item, linkIndex) =>
+      "<div class='link-item-card'>" +
+      "<label>Image:</label>" +
+      "<div class='array-row array-row-image'>" +
+      (item.image ? "<img class='link-thumb' src='" + safeText(item.image) + "' alt='Link image preview' />" : "<div class='link-thumb link-thumb-empty'>No image</div>") +
+      "<input value='" + safeText(item.image || '') + "' placeholder='Image URL' onchange='editLinkImage(" + index + ", " + linkIndex + ", this.value)'/>" +
+      "</div>" +
+      "<label>Link + Info:</label>" +
       "<div class='array-row array-row-double'>" +
       "<input value='" + safeText(item.url) + "' placeholder='Link URL' onchange='editLinkUrl(" + index + ", " + linkIndex + ", this.value)'/>" +
       "<input value='" + safeText(item.info) + "' placeholder='Link info' onchange='editLinkInfo(" + index + ", " + linkIndex + ", this.value)'/>" +
       "<button type='button' class='tiny-btn' onclick='removeLink(" + index + ", " + linkIndex + "); event.stopPropagation();'>✕</button>" +
+      "</div>" +
       '</div>'
     ).join('');
 
@@ -338,12 +346,18 @@ function editName(index, value) {
 function addLink(index) {
   expandedWaypointSet.add(index);
   waypoints[index].linkItems = waypoints[index].linkItems || [];
-  waypoints[index].linkItems.push({ url: '', info: '' });
+  waypoints[index].linkItems.push({ image: '', url: '', info: '' });
   renderSidebar();
 }
 
 function editLinkUrl(index, linkIndex, value) {
   waypoints[index].linkItems[linkIndex].url = value;
+}
+
+function editLinkImage(index, linkIndex, value) {
+  waypoints[index].linkItems[linkIndex].image = value;
+  expandedWaypointSet.add(index);
+  renderSidebar();
 }
 
 function editLinkInfo(index, linkIndex, value) {
@@ -397,9 +411,10 @@ function serializeWaypoints() {
     lng: wp.latlng.lng,
     name: wp.name,
     linkItems: (wp.linkItems || []).map((item) => ({
+      image: String(item.image || '').trim(),
       url: String(item.url || '').trim(),
       info: String(item.info || '').trim()
-    })).filter((item) => item.url || item.info),
+    })).filter((item) => item.image || item.url || item.info),
     links: (wp.linkItems || []).map((item) => String(item.url || '').trim()).filter(Boolean),
     notes: (wp.notes || []).map((v) => String(v || '').trim()).filter(Boolean)
   }));
@@ -410,8 +425,8 @@ function loadWaypoints(saved, savedSegmentModes) {
     latlng: L.latLng(wp.lat, wp.lng),
     name: wp.name || `Waypoint ${index + 1}`,
     linkItems: Array.isArray(wp.linkItems)
-      ? wp.linkItems.map((item) => ({ url: item.url || '', info: item.info || '' }))
-      : (Array.isArray(wp.links) ? wp.links.map((url) => ({ url, info: '' })) : []),
+      ? wp.linkItems.map((item) => ({ image: item.image || '', url: item.url || '', info: item.info || '' }))
+      : (Array.isArray(wp.links) ? wp.links.map((url) => ({ image: '', url, info: '' })) : []),
     notes: Array.isArray(wp.notes) ? wp.notes : (wp.notes ? [wp.notes] : [])
   }));
 

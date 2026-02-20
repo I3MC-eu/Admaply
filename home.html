@@ -44,6 +44,23 @@ function formatDate(value) {
   return new Date(value).toLocaleString();
 }
 
+
+function buildRouteImages(waypoints) {
+  const images = (waypoints || [])
+    .flatMap((wp) => Array.isArray(wp.linkItems) ? wp.linkItems : [])
+    .map((item) => String((item && item.image) || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+
+  if (!images.length) {
+    return '<div class="route-image-strip-empty">No images</div>';
+  }
+
+  return '<div class="route-image-strip">' +
+    images.map((src) => `<img src="${src}" alt="Route link image" class="route-image-thumb" />`).join('') +
+    '</div>';
+}
+
 function buildRouteMiniMap(waypoints) {
   if (!Array.isArray(waypoints) || waypoints.length < 2) {
     return '<div class="mini-map-empty">No preview</div>';
@@ -99,7 +116,7 @@ function renderRoutes(routes) {
         <p>${route.waypointCount} waypoints • ${formatDate(route.createdAt)}</p>
         <button class="secondary-btn" onclick="openRoute(${route.id})">Open Route</button>
       </div>
-      ${buildRouteMiniMap(route.waypoints)}
+      ${buildRouteMiniMap(route.waypoints)}${buildRouteImages(route.waypoints)}
     </div>
   `).join('');
 }
