@@ -64,7 +64,8 @@ function createSession(user) {
   sessions.set(sid, {
     key,
     username,
-    email
+    email,
+    demoRoutes: []
   });
 
   return sid;
@@ -94,6 +95,13 @@ function isPathSafe(filePath) {
 
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+
+function isDemoIdentity(user) {
+  const email = String((user && user.email) || '').trim().toLowerCase();
+  const username = String((user && user.username) || '').trim().toLowerCase();
+  return email === 'demo@admaply.local' || username === 'demo';
 }
 
 
@@ -149,24 +157,36 @@ function normalizeWaypoint(waypoint, index) {
   const rawNotes = Array.isArray(waypoint.notes)
     ? waypoint.notes
     : (typeof waypoint.notes === 'string' && waypoint.notes.trim() ? [waypoint.notes] : []);
+  const rawImages = Array.isArray(waypoint.images)
+    ? waypoint.images
+    : [];
 
   const linkItems = rawLinkItems
     .map((item) => ({
-      image: String((item && item.image) || '').trim(),
       url: String((item && item.url) || '').trim(),
-      info: String((item && item.info) || '').trim()
+      info: String((item && item.info) || '').trim(),
+      legacyImage: String((item && item.image) || '').trim()
     }))
-    .filter((item) => item.image || item.url || item.info);
+    .filter((item) => item.url || item.info || item.legacyImage);
 
-  const links = linkItems.length > 0
-    ? linkItems.map((item) => item.url).filter(Boolean)
+  const images = rawImages.length > 0
+    ? rawImages.map((value) => String(value || '').trim()).filter(Boolean)
+    : linkItems.map((item) => item.legacyImage).filter(Boolean);
+
+  const cleanedLinkItems = linkItems
+    .map((item) => ({ url: item.url, info: item.info }))
+    .filter((item) => item.url || item.info);
+
+  const links = cleanedLinkItems.length > 0
+    ? cleanedLinkItems.map((item) => item.url).filter(Boolean)
     : rawLinks.map((value) => String(value || '').trim()).filter(Boolean);
 
   return {
     lat: Number(waypoint.lat),
     lng: Number(waypoint.lng),
     name: String(waypoint.name || `Waypoint ${index + 1}`),
-    linkItems,
+    linkItems: cleanedLinkItems,
+    images,
     links,
     notes: rawNotes.map((v) => String(v || '').trim()).filter(Boolean)
   };
@@ -271,11 +291,14 @@ async function handler(req, res) {
     if (!user) return sendJson(res, 401, { error: 'Invalid credentials' });
 
     const sid = createSession(user);
+    const cookie = isDemoIdentity(user)
+      ? `sid=${sid}; HttpOnly; Path=/; SameSite=Lax`
+      : `sid=${sid}; HttpOnly; Path=/; Max-Age=43200; SameSite=Lax`;
     return sendJson(
       res,
       200,
       { ok: true, user: { username: user.username || user.email, email: user.email || '' } },
-      { 'Set-Cookie': `sid=${sid}; HttpOnly; Path=/; Max-Age=43200; SameSite=Lax` }
+      { 'Set-Cookie': cookie }
     );
   }
 
@@ -289,9 +312,10 @@ async function handler(req, res) {
     const user = getSessionUser(req);
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
 
-    const store = await readStore();
-    const userRouteState = getUserRoutes(store, user);
-    const userRoutes = userRouteState.routes;
+    const isDemoUser = isDemoIdentity(user);
+    const store = isDemoUser ? null : await readStore();
+    const userRouteState = isDemoUser ? null : getUserRoutes(store, user);
+    const userRoutes = isDemoUser ? user.demoRoutes : userRouteState.routes;
 
     if (pathname === '/api/routes/latest' && req.method === 'GET') {
       const latest = userRoutes[userRoutes.length - 1] || null;
@@ -333,7 +357,7 @@ async function handler(req, res) {
       };
 
       userRoutes.push(entry);
-      await writeStore(store);
+      if (!isDemoUser) await writeStore(store);
       return sendJson(res, 200, { ok: true, route: entry });
     }
 

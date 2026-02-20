@@ -21,6 +21,11 @@
     <input id="email" type="email" placeholder="Email">
     <input id="password" type="password" placeholder="Password">
 
+    <label class="cookie-consent">
+      <input id="cookieConsent" type="checkbox">
+      <span>I understand this app uses cookies for login/session.</span>
+    </label>
+
     <button id="authSubmitBtn">Login</button>
     <p id="loginMessage" class="status-message"></p>
     <p class="status-message">Demo: <strong>demo@admaply.local</strong> / <strong>demo123</strong></p>
@@ -59,8 +64,14 @@ async function submitAuth() {
   const email = document.getElementById('email').value.trim();
   const password = document.getElementById('password').value;
   const message = document.getElementById('loginMessage');
+  const cookieConsent = document.getElementById('cookieConsent');
 
   message.textContent = '';
+
+  if (!cookieConsent.checked) {
+    message.textContent = 'Please confirm cookie usage before continuing.';
+    return;
+  }
 
   const endpoint = mode === 'login' ? '/api/login' : '/api/signup';
 

@@ -47,8 +47,12 @@ function formatDate(value) {
 
 function buildRouteImages(waypoints) {
   const images = (waypoints || [])
-    .flatMap((wp) => Array.isArray(wp.linkItems) ? wp.linkItems : [])
-    .map((item) => String((item && item.image) || '').trim())
+    .flatMap((wp) => {
+      const directImages = Array.isArray(wp.images) ? wp.images : [];
+      if (directImages.length) return directImages;
+      return Array.isArray(wp.linkItems) ? wp.linkItems.map((item) => item && item.image) : [];
+    })
+    .map((value) => String(value || '').trim())
     .filter(Boolean)
     .slice(0, 3);
 
