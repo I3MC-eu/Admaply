@@ -1,6 +1,6 @@
 # AdMaply
 
-AdMaply is a lightweight adventure planning platform that helps you map, organize, and structure your journeys in one place.
+AdMaply is a lightweight adventure planning platform that helps you map, organize, and structure your journeys in one place. </br>
 Live under: </br>
 https://admaply.i3mc.fun/
 
