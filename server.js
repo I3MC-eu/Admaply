@@ -10,7 +10,7 @@ const STORE_FILE = path.join(DATA_DIR, 'store.json');
 const sessions = new Map();
 
 const DEFAULT_STORE = {
-  users: [{ username: 'demo', password: 'demo123' }],
+  users: [{ username: 'demo', email: 'demo@admaply.local', password: 'demo123' }],
   routes: {}
 };
 
@@ -35,8 +35,6 @@ async function ensureStore() {
 async function readStore() {
   await ensureStore();
   return JSON.parse(await fs.readFile(STORE_FILE, 'utf8'));
-  const raw = await fs.readFile(STORE_FILE, 'utf8');
-  return JSON.parse(raw);
 }
 
 async function writeStore(store) {
@@ -57,17 +55,24 @@ function parseCookies(req) {
   }, {});
 }
 
-function getSessionUser(req) {
-  const cookies = parseCookies(req);
-  const sid = cookies.sid;
-  if (!sid) return null;
-  return sessions.get(sid) || null;
+function createSession(user) {
+  const sid = crypto.randomBytes(24).toString('hex');
+  const key = String((user.email || user.username || '').trim().toLowerCase());
+  const username = String(user.username || user.email || '').trim();
+  const email = String(user.email || '').trim().toLowerCase();
+
+  sessions.set(sid, {
+    key,
+    username,
+    email
+  });
+
+  return sid;
 }
 
-function createSession(username) {
-  const sid = crypto.randomBytes(24).toString('hex');
-  sessions.set(sid, { username });
-  return sid;
+function getSessionUser(req) {
+  const sid = parseCookies(req).sid;
+  return sid ? sessions.get(sid) || null : null;
 }
 
 async function readJsonBody(req) {
@@ -84,13 +89,49 @@ async function readJsonBody(req) {
 }
 
 function isPathSafe(filePath) {
-  const resolved = path.resolve(filePath);
-  return resolved.startsWith(path.resolve(ROOT));
+  return path.resolve(filePath).startsWith(path.resolve(ROOT));
 }
 
-async function serveStatic(req, res) {
-  const pathname = req.url === '/' ? '/index.html' : req.url;
-  const safePath = path.normalize(decodeURIComponent(pathname)).replace(/^\/+/, '');
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+function normalizeWaypoint(waypoint, index) {
+  const rawLinks = Array.isArray(waypoint.links)
+    ? waypoint.links
+    : (waypoint.url ? [waypoint.url] : []);
+  const rawNotes = Array.isArray(waypoint.notes)
+    ? waypoint.notes
+    : (typeof waypoint.notes === 'string' && waypoint.notes.trim() ? [waypoint.notes] : []);
+
+  return {
+    lat: Number(waypoint.lat),
+    lng: Number(waypoint.lng),
+    name: String(waypoint.name || `Waypoint ${index + 1}`),
+    links: rawLinks.map((v) => String(v || '').trim()).filter(Boolean),
+    notes: rawNotes.map((v) => String(v || '').trim()).filter(Boolean)
+  };
+}
+
+function normalizeSegmentModes(segmentModes, waypointCount) {
+  const needed = Math.max(waypointCount - 1, 0);
+  const raw = Array.isArray(segmentModes) ? segmentModes : [];
+  return Array.from({ length: needed }, (_, index) => (raw[index] === 'hike' ? 'hike' : 'road'));
+}
+
+function summarizeRoute(route) {
+  return {
+    id: route.id,
+    name: route.name,
+    createdAt: route.createdAt,
+    waypointCount: route.waypoints.length,
+    waypoints: route.waypoints,
+    segmentModes: normalizeSegmentModes(route.segmentModes, route.waypoints.length)
+  };
+}
+
+async function serveStatic(pathname, res) {
+  const safePath = path.normalize(decodeURIComponent(pathname === '/' ? '/index.html' : pathname)).replace(/^\/+/, '');
   const filePath = path.join(ROOT, safePath);
 
   if (!isPathSafe(filePath)) {
@@ -103,11 +144,9 @@ async function serveStatic(req, res) {
     const stat = await fs.stat(filePath);
     if (!stat.isFile()) throw new Error('not-file');
 
-    const ext = path.extname(filePath).toLowerCase();
-    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    const data = await fs.readFile(filePath);
+    const contentType = MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
     res.writeHead(200, { 'Content-Type': contentType });
-    res.end(data);
+    res.end(await fs.readFile(filePath));
   } catch {
     res.writeHead(404);
     res.end('Not found');
@@ -115,90 +154,135 @@ async function serveStatic(req, res) {
 }
 
 async function handler(req, res) {
-  if (req.url === '/api/session' && req.method === 'GET') {
+  const url = new URL(req.url, 'http://localhost');
+  const { pathname } = url;
+
+  if (pathname === '/api/session' && req.method === 'GET') {
     const user = getSessionUser(req);
-    if (!user) return sendJson(res, 200, { loggedIn: false });
-    return sendJson(res, 200, { loggedIn: true, user });
+    return sendJson(res, 200, user ? { loggedIn: true, user } : { loggedIn: false });
   }
 
-  if (req.url === '/api/login' && req.method === 'POST') {
+  if (pathname === '/api/signup' && req.method === 'POST') {
     const body = await readJsonBody(req);
     if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
 
-    const { username, password } = body;
-    if (!username || !password) {
-      return sendJson(res, 400, { error: 'Username and password are required' });
-    }
+    const email = String(body.email || '').trim().toLowerCase();
+    const password = String(body.password || '');
+    const username = String(body.username || email.split('@')[0] || 'user').trim();
+
+    if (!isValidEmail(email)) return sendJson(res, 400, { error: 'Please provide a valid email address' });
+    if (password.length < 6) return sendJson(res, 400, { error: 'Password must be at least 6 characters' });
 
     const store = await readStore();
-    const user = store.users.find((entry) => entry.username === username && entry.password === password);
+    const exists = store.users.some((entry) => String(entry.email || '').toLowerCase() === email);
+    if (exists) return sendJson(res, 409, { error: 'Email already registered' });
 
-    if (!user) {
-      return sendJson(res, 401, { error: 'Invalid credentials' });
-    }
+    const newUser = { username, email, password };
+    store.users.push(newUser);
+    await writeStore(store);
 
-    const sid = createSession(user.username);
+    const sid = createSession(newUser);
     return sendJson(
       res,
       200,
-      { ok: true, user: { username: user.username } },
+      { ok: true, user: { username: newUser.username, email: newUser.email } },
       { 'Set-Cookie': `sid=${sid}; HttpOnly; Path=/; Max-Age=43200; SameSite=Lax` }
     );
   }
 
-  if (req.url === '/api/logout' && req.method === 'POST') {
-    const cookies = parseCookies(req);
-    if (cookies.sid) sessions.delete(cookies.sid);
-    return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' });
-  }
-
-  if (req.url === '/api/routes/latest' && req.method === 'GET') {
-    const user = getSessionUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
-
-    const store = await readStore();
-    const userRoutes = store.routes[user.username] || [];
-    const latest = userRoutes[userRoutes.length - 1] || null;
-    return sendJson(res, 200, { route: latest });
-  }
-
-  if (req.url === '/api/routes' && req.method === 'POST') {
-    const user = getSessionUser(req);
-    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
-
+  if (pathname === '/api/login' && req.method === 'POST') {
     const body = await readJsonBody(req);
     if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
 
-    const { waypoints, name } = body;
-    if (!Array.isArray(waypoints) || waypoints.length === 0) {
-      return sendJson(res, 400, { error: 'Waypoints are required' });
+    const email = String(body.email || '').trim().toLowerCase();
+    const username = String(body.username || '').trim();
+    const password = String(body.password || '');
+    if ((!email && !username) || !password) {
+      return sendJson(res, 400, { error: 'Email and password are required' });
     }
 
-    const cleanWaypoints = waypoints.map((waypoint) => ({
-      lat: Number(waypoint.lat),
-      lng: Number(waypoint.lng),
-      name: String(waypoint.name || ''),
-      url: String(waypoint.url || ''),
-      notes: String(waypoint.notes || '')
-    }));
-
     const store = await readStore();
-    store.routes[user.username] = store.routes[user.username] || [];
+    const user = store.users.find((entry) => {
+      const entryEmail = String(entry.email || '').toLowerCase();
+      const entryUsername = String(entry.username || '');
+      const identityMatch = email ? entryEmail === email : entryUsername === username;
+      return identityMatch && entry.password === password;
+    });
 
-    const entry = {
-      id: Date.now(),
-      name: name || `Route ${store.routes[user.username].length + 1}`,
-      createdAt: new Date().toISOString(),
-      waypoints: cleanWaypoints
-    };
+    if (!user) return sendJson(res, 401, { error: 'Invalid credentials' });
 
-    store.routes[user.username].push(entry);
-    await writeStore(store);
-
-    return sendJson(res, 200, { ok: true, route: entry });
+    const sid = createSession(user);
+    return sendJson(
+      res,
+      200,
+      { ok: true, user: { username: user.username || user.email, email: user.email || '' } },
+      { 'Set-Cookie': `sid=${sid}; HttpOnly; Path=/; Max-Age=43200; SameSite=Lax` }
+    );
   }
 
-  return serveStatic(req, res);
+  if (pathname === '/api/logout' && req.method === 'POST') {
+    const sid = parseCookies(req).sid;
+    if (sid) sessions.delete(sid);
+    return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' });
+  }
+
+  if (pathname.startsWith('/api/routes')) {
+    const user = getSessionUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+
+    const store = await readStore();
+    store.routes[user.key] = store.routes[user.key] || [];
+    const userRoutes = store.routes[user.key];
+
+    if (pathname === '/api/routes/latest' && req.method === 'GET') {
+      const latest = userRoutes[userRoutes.length - 1] || null;
+      if (!latest) return sendJson(res, 200, { route: null });
+      return sendJson(res, 200, { route: { ...latest, segmentModes: normalizeSegmentModes(latest.segmentModes, latest.waypoints.length) } });
+    }
+
+    if (pathname === '/api/routes' && req.method === 'GET') {
+      return sendJson(res, 200, { routes: userRoutes.slice().reverse().map(summarizeRoute) });
+    }
+
+    if (pathname === '/api/routes' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
+
+      const { waypoints, name, segmentModes } = body;
+      if (!Array.isArray(waypoints) || waypoints.length < 2) {
+        return sendJson(res, 400, { error: 'At least 2 waypoints are required' });
+      }
+
+      const cleanWaypoints = waypoints.map(normalizeWaypoint);
+      const hasInvalidCoords = cleanWaypoints.some((wp) => Number.isNaN(wp.lat) || Number.isNaN(wp.lng));
+      if (hasInvalidCoords) {
+        return sendJson(res, 400, { error: 'Waypoints must contain valid lat/lng values' });
+      }
+
+      const entry = {
+        id: Date.now(),
+        name: String(name || '').trim() || `Route ${userRoutes.length + 1}`,
+        createdAt: new Date().toISOString(),
+        waypoints: cleanWaypoints,
+        segmentModes: normalizeSegmentModes(segmentModes, cleanWaypoints.length)
+      };
+
+      userRoutes.push(entry);
+      await writeStore(store);
+      return sendJson(res, 200, { ok: true, route: entry });
+    }
+
+    if (pathname.startsWith('/api/routes/') && req.method === 'GET') {
+      const routeId = Number(pathname.split('/').pop());
+      if (Number.isNaN(routeId)) return sendJson(res, 400, { error: 'Invalid route id' });
+
+      const route = userRoutes.find((entry) => entry.id === routeId) || null;
+      if (!route) return sendJson(res, 404, { error: 'Route not found' });
+      return sendJson(res, 200, { route: { ...route, segmentModes: normalizeSegmentModes(route.segmentModes, route.waypoints.length) } });
+    }
+  }
+
+  return serveStatic(pathname, res);
 }
 
 const server = http.createServer((req, res) => {
