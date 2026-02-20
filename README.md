@@ -28,12 +28,12 @@ AdMaply is designed for hikers, road-trippers, explorers, and anyone who enjoys 
 
 ## 📁 Project Structure
 
-.
-├── captain-definition
-├── Dockerfile
-├── package.json
-├── server.js
-└── public/
+. </br>
+├── captain-definition </br>
+├── Dockerfile </br>
+├── package.json </br>
+├── server.js </br>
+└── public/ </br>
 
 ---
 
