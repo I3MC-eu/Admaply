@@ -11,16 +11,51 @@
 <div class="fullscreen-center">
   <div class="center-card">
     <h1>AdMaply</h1>
-    <p>Sign in to continue</p>
+    <p>Sign in to continue (demo/demo123)</p>
 
-    <input type="text" placeholder="Username">
-    <input type="password" placeholder="Password">
+    <input id="username" type="text" placeholder="Username">
+    <input id="password" type="password" placeholder="Password">
 
-    <button onclick="window.location.href='home.html'">
-      Login
-    </button>
+    <button id="loginBtn">Login</button>
+    <p id="loginMessage" class="status-message"></p>
   </div>
 </div>
+
+<script>
+async function checkSession() {
+  const res = await fetch('/api/session');
+  const data = await res.json();
+  if (data.loggedIn) {
+    window.location.href = 'home.html';
+  }
+}
+
+async function login() {
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+  const message = document.getElementById('loginMessage');
+
+  message.textContent = '';
+
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    message.textContent = data.error || 'Unable to login';
+    return;
+  }
+
+  window.location.href = 'home.html';
+}
+
+document.getElementById('loginBtn').addEventListener('click', login);
+checkSession();
+</script>
 
 </body>
 </html>
