@@ -26,17 +26,6 @@ AdMaply is designed for hikers, road-trippers, explorers, and anyone who enjoys 
 
 ---
 
-## 📁 Project Structure
-
-. </br>
-├── captain-definition </br>
-├── Dockerfile </br>
-├── package.json </br>
-├── server.js </br>
-└── public/ </br>
-
----
-
 ## 🧪 Running Locally
 
 1. Install dependencies:
