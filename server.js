@@ -96,7 +96,53 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 }
 
+
+function possibleRouteKeys(user) {
+  const keys = [];
+  const primary = String(user.key || '').trim().toLowerCase();
+  const email = String(user.email || '').trim().toLowerCase();
+  const username = String(user.username || '').trim().toLowerCase();
+
+  if (primary) keys.push(primary);
+  if (email && !keys.includes(email)) keys.push(email);
+  if (username && !keys.includes(username)) keys.push(username);
+
+  return keys;
+}
+
+function getUserRoutes(store, user) {
+  const keys = possibleRouteKeys(user);
+  const collected = [];
+
+  keys.forEach((key) => {
+    const bucket = Array.isArray(store.routes[key]) ? store.routes[key] : [];
+    bucket.forEach((route) => collected.push(route));
+  });
+
+  const unique = [];
+  const seen = new Set();
+  collected
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+    .forEach((route) => {
+      if (!seen.has(route.id)) {
+        seen.add(route.id);
+        unique.push(route);
+      }
+    });
+
+  const primaryKey = keys[0] || 'default';
+  store.routes[primaryKey] = unique;
+  keys.slice(1).forEach((key) => {
+    if (store.routes[key]) delete store.routes[key];
+  });
+
+  return { routes: store.routes[primaryKey], primaryKey };
+}
+
 function normalizeWaypoint(waypoint, index) {
+  const rawLinkItems = Array.isArray(waypoint.linkItems)
+    ? waypoint.linkItems
+    : [];
   const rawLinks = Array.isArray(waypoint.links)
     ? waypoint.links
     : (waypoint.url ? [waypoint.url] : []);
@@ -104,11 +150,23 @@ function normalizeWaypoint(waypoint, index) {
     ? waypoint.notes
     : (typeof waypoint.notes === 'string' && waypoint.notes.trim() ? [waypoint.notes] : []);
 
+  const linkItems = rawLinkItems
+    .map((item) => ({
+      url: String((item && item.url) || '').trim(),
+      info: String((item && item.info) || '').trim()
+    }))
+    .filter((item) => item.url || item.info);
+
+  const links = linkItems.length > 0
+    ? linkItems.map((item) => item.url).filter(Boolean)
+    : rawLinks.map((value) => String(value || '').trim()).filter(Boolean);
+
   return {
     lat: Number(waypoint.lat),
     lng: Number(waypoint.lng),
     name: String(waypoint.name || `Waypoint ${index + 1}`),
-    links: rawLinks.map((v) => String(v || '').trim()).filter(Boolean),
+    linkItems,
+    links,
     notes: rawNotes.map((v) => String(v || '').trim()).filter(Boolean)
   };
 }
@@ -231,8 +289,8 @@ async function handler(req, res) {
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
 
     const store = await readStore();
-    store.routes[user.key] = store.routes[user.key] || [];
-    const userRoutes = store.routes[user.key];
+    const userRouteState = getUserRoutes(store, user);
+    const userRoutes = userRouteState.routes;
 
     if (pathname === '/api/routes/latest' && req.method === 'GET') {
       const latest = userRoutes[userRoutes.length - 1] || null;
@@ -259,9 +317,15 @@ async function handler(req, res) {
         return sendJson(res, 400, { error: 'Waypoints must contain valid lat/lng values' });
       }
 
+      const routeName = String(name || '').trim() || `Route ${userRoutes.length + 1}`;
+      const duplicateName = userRoutes.some((route) => String(route.name || '').toLowerCase() === routeName.toLowerCase());
+      if (duplicateName) {
+        return sendJson(res, 409, { error: 'A route with this name already exists. Please choose a different name.' });
+      }
+
       const entry = {
         id: Date.now(),
-        name: String(name || '').trim() || `Route ${userRoutes.length + 1}`,
+        name: routeName,
         createdAt: new Date().toISOString(),
         waypoints: cleanWaypoints,
         segmentModes: normalizeSegmentModes(segmentModes, cleanWaypoints.length)

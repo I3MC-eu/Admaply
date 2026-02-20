@@ -242,6 +242,35 @@ body {
   margin-bottom: 8px;
 }
 
+
+.drag-hint {
+  margin-top: -6px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.wp-item {
+  cursor: grab;
+}
+
+.wp-item.drag-target {
+  outline: 2px dashed var(--accent);
+}
+
+.drag-handle {
+  color: var(--text-secondary);
+  margin-right: 8px;
+  letter-spacing: 1px;
+}
+
+.array-row-double input {
+  flex: 1;
+}
+
+.array-row-double .tiny-btn {
+  margin-top: 0;
+}
+
 .wp-item {
   background: var(--bg-card);
   border: 1px solid var(--border);

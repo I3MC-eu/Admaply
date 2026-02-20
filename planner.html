@@ -26,6 +26,7 @@
     </div>
 
     <h3>Waypoints</h3>
+    <p class="muted drag-hint">Drag waypoint cards to reorder.</p>
     <div id="waypointList"></div>
   </div>
 </div>
@@ -52,18 +53,15 @@ var segmentModes = [];
 var waypointCounter = 1;
 var segmentLayers = [];
 var expandedWaypointSet = new Set();
-
+var draggedIndex = null;
 
 function removeLegacyPlannerDuplicates() {
-  // Some conflicted files had duplicate route info cards/messages.
   document.querySelectorAll('#routeInfo').forEach((node, index) => {
     if (index > 0) node.remove();
   });
-
   document.querySelectorAll('#waypointList').forEach((node, index) => {
     if (index > 0) node.remove();
   });
-
   const actionPanel = document.querySelector('.planner-actions');
   if (actionPanel) {
     actionPanel.querySelectorAll('.route-info').forEach((node) => node.remove());
@@ -98,7 +96,12 @@ async function checkSession() {
 }
 
 map.on('click', function(e) {
-  waypoints.push({ latlng: e.latlng, name: 'Waypoint ' + waypointCounter, links: [], notes: [] });
+  waypoints.push({
+    latlng: e.latlng,
+    name: 'Waypoint ' + waypointCounter,
+    linkItems: [],
+    notes: []
+  });
   waypointCounter++;
   if (waypoints.length >= 2) segmentModes.push('road');
   renderSidebar();
@@ -159,53 +162,62 @@ function updateRouting() {
     });
 
     control.on('routingerror', function() {
-      if (mode === 'hike') {
-        const roadFallback = createRouteControl(wp1, wp2, 'road');
-        segmentLayers.push(roadFallback);
-        roadFallback.on('routesfound', function(e) {
-          const route = e.routes[0];
-          totalDistance += route.summary.totalDistance;
-          allInstructions = allInstructions.concat(route.instructions.map((step) => ({
-            text: '[Road fallback] ' + step.text,
-            distance: step.distance
-          })));
-          pending--;
-          if (pending === 0) {
-            updateRouteInfo(totalDistance);
-            renderDirections(allInstructions);
-          }
-        });
-        roadFallback.on('routingerror', function() {
-          const fallback = L.polyline([wp1.latlng, wp2.latlng], { color: '#f39c12', weight: 4, dashArray: '6,6' }).addTo(map);
-          segmentLayers.push(fallback);
-          const dist = wp1.latlng.distanceTo(wp2.latlng);
-          totalDistance += dist;
-          allInstructions.push({ text: `Fallback direct segment (${mode})`, distance: dist });
-          pending--;
-          if (pending === 0) {
-            updateRouteInfo(totalDistance);
-            renderDirections(allInstructions);
-          }
-        });
-      } else {
-        const fallback = L.polyline([wp1.latlng, wp2.latlng], { color: '#f39c12', weight: 4, dashArray: '6,6' }).addTo(map);
-        segmentLayers.push(fallback);
-        const dist = wp1.latlng.distanceTo(wp2.latlng);
-        totalDistance += dist;
-        allInstructions.push({ text: `Fallback direct segment (${mode})`, distance: dist });
-        pending--;
-        if (pending === 0) {
-          updateRouteInfo(totalDistance);
-          renderDirections(allInstructions);
-        }
+      const fallback = L.polyline([wp1.latlng, wp2.latlng], { color: '#f39c12', weight: 4, dashArray: '6,6' }).addTo(map);
+      segmentLayers.push(fallback);
+      const dist = wp1.latlng.distanceTo(wp2.latlng);
+      totalDistance += dist;
+      allInstructions.push({ text: `Fallback direct segment (${mode})`, distance: dist });
+      pending--;
+      if (pending === 0) {
+        updateRouteInfo(totalDistance);
+        renderDirections(allInstructions);
       }
     });
   }
 }
 
 function updateRouteInfo(distanceMeters) {
-  document.getElementById('routeInfo').dataset.meters = String(distanceMeters);
   document.getElementById('routeInfo').innerHTML = 'Total Distance: ' + (distanceMeters / 1000).toFixed(2) + ' km';
+}
+
+function onDragStart(index, event) {
+  draggedIndex = index;
+  event.dataTransfer.effectAllowed = 'move';
+}
+
+function onDragOver(event) {
+  event.preventDefault();
+}
+
+function onDragEnter(event, index) {
+  event.preventDefault();
+  const cards = document.querySelectorAll('.wp-item');
+  if (cards[index]) cards[index].classList.add('drag-target');
+}
+
+function onDragLeave(index) {
+  const cards = document.querySelectorAll('.wp-item');
+  if (cards[index]) cards[index].classList.remove('drag-target');
+}
+
+function onDrop(index, event) {
+  event.preventDefault();
+  const cards = document.querySelectorAll('.wp-item');
+  if (cards[index]) cards[index].classList.remove('drag-target');
+
+  if (draggedIndex === null || draggedIndex === index) return;
+
+  const moved = waypoints.splice(draggedIndex, 1)[0];
+  waypoints.splice(index, 0, moved);
+
+  // Segment mode semantics depend on adjacency; reset safely after reorder.
+  segmentModes = Array.from({ length: Math.max(waypoints.length - 1, 0) }, () => 'road');
+  expandedWaypointSet = new Set([index]);
+  draggedIndex = null;
+
+  setMessage('Waypoints reordered. Segment transport modes reset to Road.');
+  renderSidebar();
+  updateRouting();
 }
 
 function renderSidebar() {
@@ -215,6 +227,13 @@ function renderSidebar() {
   waypoints.forEach((wp, index) => {
     const wrapper = document.createElement('div');
     wrapper.className = 'wp-item';
+    wrapper.draggable = true;
+    wrapper.addEventListener('dragstart', (event) => onDragStart(index, event));
+    wrapper.addEventListener('dragover', onDragOver);
+    wrapper.addEventListener('dragenter', (event) => onDragEnter(event, index));
+    wrapper.addEventListener('dragleave', () => onDragLeave(index));
+    wrapper.addEventListener('drop', (event) => onDrop(index, event));
+
     if (expandedWaypointSet.has(index)) wrapper.classList.add('expanded');
 
     let segmentControl = '';
@@ -227,9 +246,11 @@ function renderSidebar() {
         '</select>';
     }
 
-    const linksHtml = (wp.links || []).map((link, linkIndex) =>
-      "<div class='array-row'>" +
-      "<input value='" + safeText(link) + "' placeholder='https://...' onchange='editLink(" + index + ", " + linkIndex + ", this.value)'/>" +
+    const linkItems = Array.isArray(wp.linkItems) ? wp.linkItems : [];
+    const linksHtml = linkItems.map((item, linkIndex) =>
+      "<div class='array-row array-row-double'>" +
+      "<input value='" + safeText(item.url) + "' placeholder='Link URL' onchange='editLinkUrl(" + index + ", " + linkIndex + ", this.value)'/>" +
+      "<input value='" + safeText(item.info) + "' placeholder='Link info' onchange='editLinkInfo(" + index + ", " + linkIndex + ", this.value)'/>" +
       "<button type='button' class='tiny-btn' onclick='removeLink(" + index + ", " + linkIndex + "); event.stopPropagation();'>✕</button>" +
       '</div>'
     ).join('');
@@ -243,16 +264,17 @@ function renderSidebar() {
 
     wrapper.innerHTML =
       "<div class='wp-header' onclick='toggleWaypoint(" + index + ")'>" +
+      "<span class='drag-handle' title='Drag to reorder'>⋮⋮</span>" +
       '<span>' + safeText(wp.name) + '</span>' +
       segmentControl +
       '</div>' +
       "<div class='wp-content'>" +
       '<label>Name:</label>' +
       "<input value='" + safeText(wp.name) + "' onchange='editName(" + index + ", this.value)' /><br>" +
-      '<label>Links:</label>' +
+      '<label>Links (URL + Info):</label>' +
       "<div class='array-list'>" + linksHtml + '</div>' +
       "<button type='button' class='tiny-add-btn' onclick='addLink(" + index + "); event.stopPropagation();'>+ Add Link</button>" +
-      '<label>Notes:</label>' +
+      '<label>Additional Notes:</label>' +
       "<div class='array-list'>" + notesHtml + '</div>' +
       "<button type='button' class='tiny-add-btn' onclick='addNote(" + index + "); event.stopPropagation();'>+ Add Note</button>" +
       "<button type='button' class='danger-btn' onclick='removeWaypoint(" + index + "); event.stopPropagation();'>Delete Waypoint</button>" +
@@ -315,18 +337,22 @@ function editName(index, value) {
 
 function addLink(index) {
   expandedWaypointSet.add(index);
-  waypoints[index].links = waypoints[index].links || [];
-  waypoints[index].links.push('');
+  waypoints[index].linkItems = waypoints[index].linkItems || [];
+  waypoints[index].linkItems.push({ url: '', info: '' });
   renderSidebar();
 }
 
-function editLink(index, linkIndex, value) {
-  waypoints[index].links[linkIndex] = value;
+function editLinkUrl(index, linkIndex, value) {
+  waypoints[index].linkItems[linkIndex].url = value;
+}
+
+function editLinkInfo(index, linkIndex, value) {
+  waypoints[index].linkItems[linkIndex].info = value;
 }
 
 function removeLink(index, linkIndex) {
   expandedWaypointSet.add(index);
-  waypoints[index].links.splice(linkIndex, 1);
+  waypoints[index].linkItems.splice(linkIndex, 1);
   renderSidebar();
 }
 
@@ -370,7 +396,11 @@ function serializeWaypoints() {
     lat: wp.latlng.lat,
     lng: wp.latlng.lng,
     name: wp.name,
-    links: (wp.links || []).map((v) => String(v || '').trim()).filter(Boolean),
+    linkItems: (wp.linkItems || []).map((item) => ({
+      url: String(item.url || '').trim(),
+      info: String(item.info || '').trim()
+    })).filter((item) => item.url || item.info),
+    links: (wp.linkItems || []).map((item) => String(item.url || '').trim()).filter(Boolean),
     notes: (wp.notes || []).map((v) => String(v || '').trim()).filter(Boolean)
   }));
 }
@@ -379,18 +409,16 @@ function loadWaypoints(saved, savedSegmentModes) {
   waypoints = (saved || []).map((wp, index) => ({
     latlng: L.latLng(wp.lat, wp.lng),
     name: wp.name || `Waypoint ${index + 1}`,
-    links: Array.isArray(wp.links) ? wp.links : (wp.url ? [wp.url] : []),
+    linkItems: Array.isArray(wp.linkItems)
+      ? wp.linkItems.map((item) => ({ url: item.url || '', info: item.info || '' }))
+      : (Array.isArray(wp.links) ? wp.links.map((url) => ({ url, info: '' })) : []),
     notes: Array.isArray(wp.notes) ? wp.notes : (wp.notes ? [wp.notes] : [])
   }));
 
-  const neededSegments = Math.max(waypoints.length - 1, 0);
+  const needed = Math.max(waypoints.length - 1, 0);
   const cleanModes = Array.isArray(savedSegmentModes) ? savedSegmentModes : [];
-  segmentModes = Array.from({ length: neededSegments }, (_, idx) => {
-    const value = cleanModes[idx];
-    return value === 'hike' ? 'hike' : 'road';
-  });
+  segmentModes = Array.from({ length: needed }, (_, idx) => (cleanModes[idx] === 'hike' ? 'hike' : 'road'));
 
-  reindexExpandedSet(index);
   waypointCounter = waypoints.length + 1;
   renderSidebar();
   updateRouting();
@@ -410,11 +438,7 @@ async function saveRoute() {
   const res = await fetch('/api/routes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      waypoints: serializeWaypoints(),
-      segmentModes,
-      name: routeName
-    })
+    body: JSON.stringify({ waypoints: serializeWaypoints(), segmentModes, name: routeName })
   });
 
   const data = await res.json();
