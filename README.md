@@ -62,7 +62,7 @@ Make sure these files are at the root of the archive (not inside another folder)
 
 ## 🔐 Demo Credentials
   
-  Email: demo@admaply.local
+  Email: demo@admaply.local </br>
   Password: demo123
 
   
