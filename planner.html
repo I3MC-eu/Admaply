@@ -6,8 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
 
@@ -19,6 +18,12 @@
     <h3>Route Info</h3>
     <div id="routeInfo" class="route-info">
       Total Distance: –
+    </div>
+
+    <div class="planner-actions">
+      <button class="secondary-btn" onclick="saveRoute()">Save Route</button>
+      <button class="secondary-btn" onclick="loadLatestRoute()">Load Latest</button>
+      <p id="plannerMessage" class="status-message"></p>
     </div>
 
     <h3>Waypoints</h3>
@@ -40,32 +45,30 @@
 <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
 
 <script>
-
-/* ================= MAP ================= */
-
 var map = L.map('map').setView([48.2, 14.3], 10);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
 
-
-/* ================= STATE ================= */
-
 var waypoints = [];
 var waypointCounter = 1;
 var segmentLayers = [];
 
-
-/* ================= ADD WAYPOINT ================= */
+async function checkSession() {
+  const res = await fetch('/api/session');
+  const data = await res.json();
+  if (!data.loggedIn) {
+    window.location.href = 'index.html';
+  }
+}
 
 map.on('click', function(e) {
-
   waypoints.push({
     latlng: e.latlng,
-    name: "Waypoint " + waypointCounter,
-    url: "",
-    notes: ""
+    name: 'Waypoint ' + waypointCounter,
+    url: '',
+    notes: ''
   });
 
   waypointCounter++;
@@ -73,12 +76,8 @@ map.on('click', function(e) {
   updateRouting();
 });
 
-
-/* ================= ROUTING ================= */
-
 function updateRouting() {
-
-  segmentLayers.forEach(layer => {
+  segmentLayers.forEach((layer) => {
     if (layer instanceof L.Routing.Control) {
       layer.remove();
     } else {
@@ -93,23 +92,19 @@ function updateRouting() {
   let pendingRoadSegments = 0;
 
   if (waypoints.length < 2) {
-    document.getElementById("routeInfo").innerHTML =
-      "Total Distance: –";
-    document.getElementById("directionsList").innerHTML =
-      "No route yet.";
+    document.getElementById('routeInfo').innerHTML = 'Total Distance: –';
+    document.getElementById('directionsList').innerHTML = 'No route yet.';
     return;
   }
 
   for (let i = 0; i < waypoints.length - 1; i++) {
-
     const wp1 = waypoints[i];
-    const wp2 = waypoints[i+1];
+    const wp2 = waypoints[i + 1];
 
-    const select = document.getElementById("segmentMode_" + i);
-    const mode = select ? select.value : "road";
+    const select = document.getElementById('segmentMode_' + i);
+    const mode = select ? select.value : 'road';
 
-    if (mode === "road") {
-
+    if (mode === 'road') {
       pendingRoadSegments++;
 
       const control = L.Routing.control({
@@ -129,7 +124,6 @@ function updateRouting() {
       segmentLayers.push(control);
 
       control.on('routesfound', function(e) {
-
         const route = e.routes[0];
 
         totalDistance += route.summary.totalDistance;
@@ -142,17 +136,12 @@ function updateRouting() {
           renderDirections(allInstructions);
         }
       });
-
     } else {
-
-      const line = L.polyline(
-        [wp1.latlng, wp2.latlng],
-        {
-          color: '#2ecc71',
-          weight: 4,
-          dashArray: '6,6'
-        }
-      ).addTo(map);
+      const line = L.polyline([wp1.latlng, wp2.latlng], {
+        color: '#2ecc71',
+        weight: 4,
+        dashArray: '6,6'
+      }).addTo(map);
 
       segmentLayers.push(line);
 
@@ -160,7 +149,7 @@ function updateRouting() {
       totalDistance += dist;
 
       allInstructions.push({
-        text: "Direct segment (hike/off-road)",
+        text: 'Direct segment (hike/off-road)',
         distance: dist
       });
     }
@@ -174,51 +163,42 @@ function updateRouting() {
 
 function updateRouteInfo(distanceMeters) {
   const km = (distanceMeters / 1000).toFixed(2);
-  document.getElementById("routeInfo").innerHTML =
-    "Total Distance: " + km + " km";
+  document.getElementById('routeInfo').innerHTML = 'Total Distance: ' + km + ' km';
 }
 
-
-/* ================= SIDEBAR ================= */
-
 function renderSidebar() {
-
-  const container = document.getElementById("waypointList");
-  container.innerHTML = "";
+  const container = document.getElementById('waypointList');
+  container.innerHTML = '';
 
   waypoints.forEach((wp, index) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'wp-item';
 
-    const wrapper = document.createElement("div");
-    wrapper.className = "wp-item";
-
-    let segmentControl = "";
+    let segmentControl = '';
 
     if (index < waypoints.length - 1) {
       segmentControl =
         "<select class='segment-select' id='segmentMode_" + index + "' onchange='updateRouting()'>" +
         "<option value='road'>🚗 Road</option>" +
         "<option value='direct'>🥾 Direct</option>" +
-        "</select>";
+        '</select>';
     }
 
     wrapper.innerHTML =
       "<div class='wp-header' onclick='toggleWaypoint(" + index + ")'>" +
-        "<span>" + wp.name + "</span>" +
-        segmentControl +
-      "</div>" +
-
+      '<span>' + wp.name + '</span>' +
+      segmentControl +
+      '</div>' +
       "<div class='wp-content'>" +
-        "<label>Name:</label>" +
-        "<input value='" + wp.name + "' onchange='editName(" + index + ", this.value)' /><br>" +
-
-        "<label>URL:</label>" +
-        "<input value='" + wp.url + "' onchange='editUrl(" + index + ", this.value)' /><br>" +
-
-        "<label>Notes:</label>" +
-        "<textarea rows='2' onchange='editNotes(" + index + ", this.value)'>" +
-        wp.notes +
-        "</textarea>" +
-      "</div>";
+      '<label>Name:</label>' +
+      "<input value='" + wp.name + "' onchange='editName(" + index + ", this.value)' /><br>" +
+      '<label>URL:</label>' +
+      "<input value='" + wp.url + "' onchange='editUrl(" + index + ", this.value)' /><br>" +
+      '<label>Notes:</label>' +
+      "<textarea rows='2' onchange='editNotes(" + index + ", this.value)'>" +
+      wp.notes +
+      '</textarea>' +
+      '</div>';
 
     container.appendChild(wrapper);
   });
@@ -242,36 +222,101 @@ function editNotes(index, value) {
   waypoints[index].notes = value;
 }
 
-
-/* ================= DIRECTIONS ================= */
-
 function renderDirections(instructions) {
+  const container = document.getElementById('directionsList');
+  container.innerHTML = '';
 
-  const container = document.getElementById("directionsList");
-  container.innerHTML = "";
-
-  instructions.forEach(step => {
-
-    const div = document.createElement("div");
-    div.className = "direction-step";
+  instructions.forEach((step) => {
+    const div = document.createElement('div');
+    div.className = 'direction-step';
 
     div.innerHTML =
-      "<div>" + step.text + "</div>" +
-      "<small>" + (step.distance / 1000).toFixed(2) + " km</small>";
+      '<div>' + step.text + '</div>' +
+      '<small>' + (step.distance / 1000).toFixed(2) + ' km</small>';
 
     container.appendChild(div);
   });
 }
 
 function toggleDirections() {
-  const panel = document.getElementById("floatingDirections");
-  const arrow = document.getElementById("dirArrow");
+  const panel = document.getElementById('floatingDirections');
+  const arrow = document.getElementById('dirArrow');
 
-  panel.classList.toggle("collapsed");
-  arrow.textContent =
-    panel.classList.contains("collapsed") ? "▲" : "▼";
+  panel.classList.toggle('collapsed');
+  arrow.textContent = panel.classList.contains('collapsed') ? '▲' : '▼';
 }
 
+function setMessage(text) {
+  document.getElementById('plannerMessage').textContent = text;
+}
+
+function serializeWaypoints() {
+  return waypoints.map((wp) => ({
+    lat: wp.latlng.lat,
+    lng: wp.latlng.lng,
+    name: wp.name,
+    url: wp.url,
+    notes: wp.notes
+  }));
+}
+
+function loadWaypoints(saved) {
+  waypoints = (saved || []).map((wp, index) => ({
+    latlng: L.latLng(wp.lat, wp.lng),
+    name: wp.name || `Waypoint ${index + 1}`,
+    url: wp.url || '',
+    notes: wp.notes || ''
+  }));
+
+  waypointCounter = waypoints.length + 1;
+  renderSidebar();
+  updateRouting();
+}
+
+async function saveRoute() {
+  if (waypoints.length < 2) {
+    setMessage('Add at least 2 waypoints to save.');
+    return;
+  }
+
+  const res = await fetch('/api/routes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      waypoints: serializeWaypoints(),
+      name: `My route (${new Date().toLocaleString()})`
+    })
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    setMessage(data.error || 'Unable to save route.');
+    return;
+  }
+
+  setMessage('Route saved.');
+}
+
+async function loadLatestRoute() {
+  const res = await fetch('/api/routes/latest');
+  const data = await res.json();
+
+  if (!res.ok) {
+    setMessage(data.error || 'Unable to load route.');
+    return;
+  }
+
+  if (!data.route) {
+    setMessage('No saved route found yet.');
+    return;
+  }
+
+  loadWaypoints(data.route.waypoints);
+  setMessage(`Loaded: ${data.route.name}`);
+}
+
+checkSession();
 </script>
 
 </body>

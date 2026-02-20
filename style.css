@@ -11,8 +11,6 @@
   --border: #2a333d;
 }
 
-/* ================= GLOBAL ================= */
-
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
@@ -20,13 +18,61 @@ body {
   color: var(--text-primary);
 }
 
-/* Kill default Leaflet routing UI completely */
+.fullscreen-center {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.center-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.center-card input,
+.center-card button {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #11161b;
+  color: var(--text-primary);
+}
+
+.center-card button {
+  background: var(--accent);
+  color: #0f1419;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+}
+
+.secondary-btn {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.status-message {
+  color: var(--text-secondary);
+  font-size: 12px;
+  min-height: 16px;
+  margin: 8px 0 0;
+}
+
 .leaflet-routing-container,
 .leaflet-routing-alt {
   display: none !important;
 }
-
-/* ================= LAYOUT ================= */
 
 .planner-layout {
   display: flex;
@@ -45,17 +91,25 @@ body {
   overflow-y: auto;
 }
 
-/* ================= ROUTE INFO ================= */
-
 .route-info {
   background: var(--bg-card);
   padding: 12px;
   border-radius: 14px;
   border: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+
+.planner-actions {
   margin-bottom: 20px;
 }
 
-/* ================= WAYPOINT CARDS ================= */
+.planner-actions .secondary-btn {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
 
 .wp-item {
   background: var(--bg-card);
@@ -67,10 +121,9 @@ body {
 }
 
 .wp-item:hover {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
-/* Header (always visible) */
 .wp-header {
   display: flex;
   justify-content: space-between;
@@ -84,7 +137,6 @@ body {
   background: var(--bg-hover);
 }
 
-/* Inline segment selector */
 .segment-select {
   background: #11161b;
   color: var(--text-primary);
@@ -94,12 +146,6 @@ body {
   font-size: 13px;
 }
 
-.segment-select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-/* Collapsible content */
 .wp-content {
   max-height: 0;
   overflow: hidden;
@@ -107,13 +153,11 @@ body {
   padding: 0 14px;
 }
 
-/* Expanded state */
 .wp-item.expanded .wp-content {
   max-height: 500px;
   padding: 14px;
 }
 
-/* Inputs inside waypoint */
 .wp-content label {
   font-size: 12px;
   color: var(--text-secondary);
@@ -132,14 +176,6 @@ body {
   font-size: 13px;
 }
 
-.wp-content input:focus,
-.wp-content textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-/* ================= FLOATING DIRECTIONS ================= */
-
 .floating-directions {
   position: absolute;
   bottom: 20px;
@@ -148,7 +184,7 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 16px;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
   z-index: 1000;
 }
@@ -176,12 +212,4 @@ body {
 .direction-step {
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
-}
-
-.direction-step:last-child {
-  border-bottom: none;
-}
-
-.direction-step small {
-  color: var(--text-secondary);
 }

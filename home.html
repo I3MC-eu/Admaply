@@ -11,7 +11,7 @@
 <div class="fullscreen-center">
   <div class="center-card">
     <h2>Welcome Back</h2>
-    <p>Your route planning hub</p>
+    <p id="welcomeText">Your route planning hub</p>
 
     <button onclick="window.location.href='planner.html'">
       Open Planner
@@ -19,9 +19,32 @@
 
     <br><br>
 
-    <a href="index.html">Logout</a>
+    <button class="secondary-btn" id="logoutBtn">Logout</button>
   </div>
 </div>
+
+<script>
+async function loadSession() {
+  const res = await fetch('/api/session');
+  const data = await res.json();
+
+  if (!data.loggedIn) {
+    window.location.href = 'index.html';
+    return;
+  }
+
+  document.getElementById('welcomeText').textContent =
+    `Signed in as ${data.user.username}`;
+}
+
+async function logout() {
+  await fetch('/api/logout', { method: 'POST' });
+  window.location.href = 'index.html';
+}
+
+document.getElementById('logoutBtn').addEventListener('click', logout);
+loadSession();
+</script>
 
 </body>
 </html>
