@@ -1,0 +1,10 @@
+{
+  "users": [
+    {
+      "username": "demo",
+      "email": "demo@admaply.local",
+      "password": "demo123"
+    }
+  ],
+  "routes": {}
+}
