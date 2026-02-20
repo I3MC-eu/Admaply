@@ -53,6 +53,7 @@ var segmentModes = [];
 var waypointCounter = 1;
 var segmentLayers = [];
 var expandedWaypointSet = new Set();
+var imageEditorWaypointSet = new Set();
 var draggedIndex = null;
 
 function removeLegacyPlannerDuplicates() {
@@ -249,11 +250,6 @@ function renderSidebar() {
     const linkItems = Array.isArray(wp.linkItems) ? wp.linkItems : [];
     const linksHtml = linkItems.map((item, linkIndex) =>
       "<div class='link-item-card'>" +
-      "<label>Image:</label>" +
-      "<div class='array-row array-row-image'>" +
-      (item.image ? "<img class='link-thumb' src='" + safeText(item.image) + "' alt='Link image preview' />" : "<div class='link-thumb link-thumb-empty'>No image</div>") +
-      "<input value='" + safeText(item.image || '') + "' placeholder='Image URL' onchange='editLinkImage(" + index + ", " + linkIndex + ", this.value)'/>" +
-      "</div>" +
       "<label>Link + Info:</label>" +
       "<div class='array-row array-row-double'>" +
       "<input value='" + safeText(item.url) + "' placeholder='Link URL' onchange='editLinkUrl(" + index + ", " + linkIndex + ", this.value)'/>" +
@@ -262,6 +258,34 @@ function renderSidebar() {
       "</div>" +
       '</div>'
     ).join('');
+
+    const imageItems = linkItems
+      .map((item, linkIndex) => ({ image: String((item && item.image) || '').trim(), linkIndex }))
+      .filter((item) => item.image);
+
+    const imageStripHtml = imageItems.length
+      ? "<div class='wp-image-scroll'>" +
+        imageItems.map((item) => "<img src='" + safeText(item.image) + "' alt='Waypoint image preview' class='wp-image-slide' />").join('') +
+        '</div>'
+      : "<div class='wp-image-empty'>No images yet</div>";
+
+    const isEditingImages = imageEditorWaypointSet.has(index);
+    const imageEditorRows = linkItems.map((item, linkIndex) =>
+      "<div class='array-row array-row-image-edit'>" +
+      (item.image
+        ? "<img class='link-thumb' src='" + safeText(item.image) + "' alt='Link image preview' />"
+        : "<div class='link-thumb link-thumb-empty'>No image</div>") +
+      "<input value='" + safeText(item.image || '') + "' placeholder='Image URL' onchange='editLinkImage(" + index + ", " + linkIndex + ", this.value)'/>" +
+      "<button type='button' class='tiny-btn' onclick='removeImageLink(" + index + ", " + linkIndex + "); event.stopPropagation();'>✕</button>" +
+      '</div>'
+    ).join('');
+
+    const imageManagerHtml = isEditingImages
+      ? "<div class='image-manager-panel'>" +
+        "<div class='array-list'>" + imageEditorRows + '</div>' +
+        "<button type='button' class='tiny-add-btn' onclick='addImageLink(" + index + "); event.stopPropagation();'>+ Add Image Link</button>" +
+        '</div>'
+      : '';
 
     const notesHtml = (wp.notes || []).map((note, noteIndex) =>
       "<div class='array-row'>" +
@@ -279,6 +303,12 @@ function renderSidebar() {
       "<div class='wp-content'>" +
       '<label>Name:</label>' +
       "<input value='" + safeText(wp.name) + "' onchange='editName(" + index + ", this.value)' /><br>" +
+      "<div class='image-section-header'>" +
+      '<label>Images:</label>' +
+      "<button type='button' class='tiny-icon-btn" + (isEditingImages ? ' active' : '') + "' onclick='toggleImageEditor(" + index + "); event.stopPropagation();'>✎</button>" +
+      '</div>' +
+      imageStripHtml +
+      imageManagerHtml +
       '<label>Links (URL + Info):</label>' +
       "<div class='array-list'>" + linksHtml + '</div>' +
       "<button type='button' class='tiny-add-btn' onclick='addLink(" + index + "); event.stopPropagation();'>+ Add Link</button>" +
@@ -304,6 +334,13 @@ function reindexExpandedSet(removedIndex) {
     if (idx > removedIndex) updated.add(idx - 1);
   });
   expandedWaypointSet = updated;
+
+  const imageUpdated = new Set();
+  imageEditorWaypointSet.forEach((idx) => {
+    if (idx < removedIndex) imageUpdated.add(idx);
+    if (idx > removedIndex) imageUpdated.add(idx - 1);
+  });
+  imageEditorWaypointSet = imageUpdated;
 }
 
 function removeWaypoint(index) {
@@ -350,6 +387,21 @@ function addLink(index) {
   renderSidebar();
 }
 
+function toggleImageEditor(index) {
+  expandedWaypointSet.add(index);
+  if (imageEditorWaypointSet.has(index)) imageEditorWaypointSet.delete(index);
+  else imageEditorWaypointSet.add(index);
+  renderSidebar();
+}
+
+function addImageLink(index) {
+  expandedWaypointSet.add(index);
+  imageEditorWaypointSet.add(index);
+  waypoints[index].linkItems = waypoints[index].linkItems || [];
+  waypoints[index].linkItems.push({ image: '', url: '', info: '' });
+  renderSidebar();
+}
+
 function editLinkUrl(index, linkIndex, value) {
   waypoints[index].linkItems[linkIndex].url = value;
 }
@@ -357,6 +409,20 @@ function editLinkUrl(index, linkIndex, value) {
 function editLinkImage(index, linkIndex, value) {
   waypoints[index].linkItems[linkIndex].image = value;
   expandedWaypointSet.add(index);
+  imageEditorWaypointSet.add(index);
+  renderSidebar();
+}
+
+function removeImageLink(index, linkIndex) {
+  expandedWaypointSet.add(index);
+  imageEditorWaypointSet.add(index);
+  const item = waypoints[index].linkItems[linkIndex] || {};
+  if (item.url || item.info) {
+    item.image = '';
+    waypoints[index].linkItems[linkIndex] = item;
+  } else {
+    waypoints[index].linkItems.splice(linkIndex, 1);
+  }
   renderSidebar();
 }
 

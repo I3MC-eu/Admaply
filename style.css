@@ -224,6 +224,70 @@ body {
   margin-bottom: 8px;
 }
 
+.array-row-image-edit {
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.image-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.tiny-icon-btn {
+  border: 1px solid var(--border);
+  background: #11161b;
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.tiny-icon-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.wp-image-scroll {
+  width: 100%;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+}
+
+.wp-image-slide {
+  flex: 0 0 100%;
+  width: 100%;
+  height: 120px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  background: #0f1419;
+}
+
+.wp-image-empty {
+  width: 100%;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.image-manager-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 10px;
+  background: #121820;
+}
+
 .link-thumb {
   width: 56px;
   height: 42px;
