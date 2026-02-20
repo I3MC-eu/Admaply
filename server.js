@@ -34,6 +34,7 @@ async function ensureStore() {
 
 async function readStore() {
   await ensureStore();
+  return JSON.parse(await fs.readFile(STORE_FILE, 'utf8'));
   const raw = await fs.readFile(STORE_FILE, 'utf8');
   return JSON.parse(raw);
 }

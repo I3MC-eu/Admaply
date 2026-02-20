@@ -8,6 +8,23 @@
 </head>
 <body>
 
+<div class="home-shell">
+  <div class="home-header-card">
+    <div>
+      <h2>Welcome Back</h2>
+      <p id="welcomeText">Your route planning hub</p>
+    </div>
+
+    <div class="home-actions">
+      <button onclick="window.location.href='planner.html'">Create New Route</button>
+      <button class="secondary-btn" id="logoutBtn">Logout</button>
+    </div>
+  </div>
+
+  <div class="home-routes-card">
+    <h3>Saved Routes</h3>
+    <p class="muted">Pick one to reopen it in the planner.</p>
+    <div id="routeList" class="saved-route-list"></div>
 <div class="fullscreen-center">
   <div class="center-card">
     <h2>Welcome Back</h2>
