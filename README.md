@@ -34,6 +34,7 @@ AdMaply is designed for hikers, road-trippers, explorers, and anyone who enjoys 
 
 2. Start the server:
 
+  npm start
 
 3. Open in your browser:
 
