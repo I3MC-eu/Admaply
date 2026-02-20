@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "verify-admaply-backend-files",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "if [ ! -f \"${workspaceFolder}/server.js\" ]; then echo 'Missing server.js in current branch. Switch to the branch that contains backend files (e.g. work) or merge backend commit into main.'; exit 1; fi; if [ ! -f \"${workspaceFolder}/package.json\" ]; then echo 'Missing package.json in current branch. Switch to the backend branch or merge backend commit.'; exit 1; fi"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
