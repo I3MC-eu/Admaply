@@ -3,15 +3,11 @@
   --bg-panel: #161c22;
   --bg-card: #1d242c;
   --bg-hover: #222b34;
-
   --text-primary: #e6edf3;
   --text-secondary: #9aa6b2;
-
   --accent: #2ecc71;
   --border: #2a333d;
 }
-
-/* ================= GLOBAL ================= */
 
 body {
   margin: 0;
@@ -20,13 +16,296 @@ body {
   color: var(--text-primary);
 }
 
-/* Kill default Leaflet routing UI completely */
+.fullscreen-center {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.center-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.center-card input,
+.center-card button {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #11161b;
+  color: var(--text-primary);
+}
+
+.center-card button {
+  background: var(--accent);
+  color: #0f1419;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+}
+
+
+.auth-switcher {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.auth-tab {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border) !important;
+  font-weight: 600;
+}
+
+.auth-tab.active {
+  background: var(--accent) !important;
+  color: #0f1419 !important;
+  border-color: transparent !important;
+}
+
+.secondary-btn {
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border) !important;
+}
+
+.status-message {
+  color: var(--text-secondary);
+  font-size: 12px;
+  min-height: 16px;
+  margin: 8px 0 0;
+}
+
+.muted {
+  color: var(--text-secondary);
+}
+
+.home-shell {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.home-header-card,
+.home-routes-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+}
+
+.home-header-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  gap: 16px;
+}
+
+.home-actions {
+  min-width: 220px;
+}
+
+.home-actions button {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--accent);
+  color: #0f1419;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.saved-route-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.saved-route-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: var(--bg-card);
+}
+
+.saved-route-card h4 {
+  margin: 0 0 6px;
+}
+
+.saved-route-card p {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.saved-route-card button {
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.mini-map {
+  width: 220px;
+  height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.mini-map-empty {
+  width: 220px;
+  height: 120px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .leaflet-routing-container,
 .leaflet-routing-alt {
   display: none !important;
 }
 
-/* ================= LAYOUT ================= */
+
+.route-image-strip,
+.route-image-strip-empty {
+  margin-top: 8px;
+}
+
+.route-image-strip {
+  display: flex;
+  gap: 6px;
+}
+
+.route-image-thumb {
+  width: 70px;
+  height: 52px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.route-image-strip-empty {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.link-item-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 8px;
+  background: #121820;
+}
+
+.array-row-image {
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.array-row-image-edit {
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.image-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.tiny-icon-btn {
+  border: 1px solid var(--border);
+  background: #11161b;
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.tiny-icon-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.wp-image-scroll {
+  width: 100%;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+}
+
+.wp-image-slide {
+  flex: 0 0 100%;
+  width: 100%;
+  height: 120px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  background: #0f1419;
+}
+
+.wp-image-empty {
+  width: 100%;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.image-manager-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 10px;
+  background: #121820;
+}
+
+.link-thumb {
+  width: 56px;
+  height: 42px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.link-thumb-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  font-size: 10px;
+  background: #0f1419;
+}
+
 
 .planner-layout {
   display: flex;
@@ -45,17 +324,72 @@ body {
   overflow-y: auto;
 }
 
-/* ================= ROUTE INFO ================= */
-
 .route-info {
   background: var(--bg-card);
   padding: 12px;
   border-radius: 14px;
   border: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+
+.planner-actions {
   margin-bottom: 20px;
 }
 
-/* ================= WAYPOINT CARDS ================= */
+.planner-actions label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.planner-actions input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #11161b;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.planner-actions .secondary-btn {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+
+.drag-hint {
+  margin-top: -6px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.wp-item {
+  cursor: grab;
+}
+
+.wp-item.drag-target {
+  outline: 2px dashed var(--accent);
+}
+
+.drag-handle {
+  color: var(--text-secondary);
+  margin-right: 8px;
+  letter-spacing: 1px;
+}
+
+.array-row-double input {
+  flex: 1;
+}
+
+.array-row-double .tiny-btn {
+  margin-top: 0;
+}
 
 .wp-item {
   background: var(--bg-card);
@@ -67,10 +401,9 @@ body {
 }
 
 .wp-item:hover {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
-/* Header (always visible) */
 .wp-header {
   display: flex;
   justify-content: space-between;
@@ -84,7 +417,6 @@ body {
   background: var(--bg-hover);
 }
 
-/* Inline segment selector */
 .segment-select {
   background: #11161b;
   color: var(--text-primary);
@@ -94,12 +426,6 @@ body {
   font-size: 13px;
 }
 
-.segment-select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-/* Collapsible content */
 .wp-content {
   max-height: 0;
   overflow: hidden;
@@ -107,13 +433,11 @@ body {
   padding: 0 14px;
 }
 
-/* Expanded state */
 .wp-item.expanded .wp-content {
-  max-height: 500px;
+  max-height: 900px;
   padding: 14px;
 }
 
-/* Inputs inside waypoint */
 .wp-content label {
   font-size: 12px;
   color: var(--text-secondary);
@@ -132,13 +456,55 @@ body {
   font-size: 13px;
 }
 
-.wp-content input:focus,
-.wp-content textarea:focus {
-  outline: none;
-  border-color: var(--accent);
+
+.array-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
-/* ================= FLOATING DIRECTIONS ================= */
+.array-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.array-row input,
+.array-row textarea {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.tiny-btn,
+.tiny-add-btn {
+  border: 1px solid var(--border);
+  background: #11161b;
+  color: var(--text-primary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tiny-btn {
+  min-width: 32px;
+  height: 32px;
+}
+
+.tiny-add-btn {
+  width: 100%;
+  padding: 7px 8px;
+  margin-bottom: 10px;
+}
+
+.danger-btn {
+  width: 100%;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid #5a2c2c;
+  background: #2a1618;
+  color: #ffb3b3;
+  cursor: pointer;
+}
 
 .floating-directions {
   position: absolute;
@@ -148,7 +514,7 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 16px;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
   z-index: 1000;
 }
@@ -176,12 +542,4 @@ body {
 .direction-step {
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
-}
-
-.direction-step:last-child {
-  border-bottom: none;
-}
-
-.direction-step small {
-  color: var(--text-secondary);
 }

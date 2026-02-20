@@ -11,16 +11,82 @@
 <div class="fullscreen-center">
   <div class="center-card">
     <h1>AdMaply</h1>
-    <p>Sign in to continue</p>
+    <p id="authSubtitle">Sign in with email and password</p>
 
-    <input type="text" placeholder="Username">
-    <input type="password" placeholder="Password">
+    <div class="auth-switcher">
+      <button id="showLoginBtn" class="auth-tab active" type="button">Login</button>
+      <button id="showSignupBtn" class="auth-tab" type="button">Sign Up</button>
+    </div>
 
-    <button onclick="window.location.href='home.html'">
-      Login
-    </button>
+    <input id="email" type="email" placeholder="Email">
+    <input id="password" type="password" placeholder="Password">
+
+    <button id="authSubmitBtn">Login</button>
+    <p id="loginMessage" class="status-message"></p>
+    <p class="status-message">Demo: <strong>demo@admaply.local</strong> / <strong>demo123</strong></p>
   </div>
 </div>
+
+<script>
+let mode = 'login';
+
+function setMode(nextMode) {
+  mode = nextMode;
+  const loginTab = document.getElementById('showLoginBtn');
+  const signupTab = document.getElementById('showSignupBtn');
+  const submit = document.getElementById('authSubmitBtn');
+  const subtitle = document.getElementById('authSubtitle');
+  const message = document.getElementById('loginMessage');
+
+  loginTab.classList.toggle('active', mode === 'login');
+  signupTab.classList.toggle('active', mode === 'signup');
+  submit.textContent = mode === 'login' ? 'Login' : 'Create Account';
+  subtitle.textContent = mode === 'login'
+    ? 'Sign in with email and password'
+    : 'Create your account with email and password';
+  message.textContent = '';
+}
+
+async function checkSession() {
+  const res = await fetch('/api/session');
+  const data = await res.json();
+  if (data.loggedIn) {
+    window.location.href = 'home.html';
+  }
+}
+
+async function submitAuth() {
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const message = document.getElementById('loginMessage');
+
+  message.textContent = '';
+
+  const endpoint = mode === 'login' ? '/api/login' : '/api/signup';
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    message.textContent = data.error || `Unable to ${mode}`;
+    return;
+  }
+
+  window.location.href = 'home.html';
+}
+
+document.getElementById('showLoginBtn').addEventListener('click', () => setMode('login'));
+document.getElementById('showSignupBtn').addEventListener('click', () => setMode('signup'));
+document.getElementById('authSubmitBtn').addEventListener('click', submitAuth);
+
+setMode('login');
+checkSession();
+</script>
 
 </body>
 </html>
