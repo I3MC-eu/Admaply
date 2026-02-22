@@ -2,12 +2,12 @@ const http = require('http');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
 const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'admaply.db');
+const DB_JSON_FILE = process.env.DB_JSON_FILE || path.join(DATA_DIR, 'admaply.json');
 const LEGACY_STORE_FILE = path.join(DATA_DIR, 'store.json');
 const sessions = new Map();
 const loginAttempts = new Map();
@@ -46,60 +46,173 @@ const LIMITS = {
 };
 
 let db;
+let dbWriteQueue = Promise.resolve();
 
-function runSqlite(mode, sql, params = []) {
-  const payload = JSON.stringify({ dbFile: DB_FILE, mode, sql, params });
-  const script = `
-import json, sqlite3, sys
-req=json.loads(sys.stdin.read())
-con=sqlite3.connect(req["dbFile"])
-con.execute("PRAGMA foreign_keys = ON")
-cur=con.cursor()
-mode=req["mode"]
-sql=req["sql"]
-params=req["params"]
-if mode=="exec":
-    con.executescript(sql)
-    con.commit()
-    print(json.dumps({"ok": True}))
-elif mode=="run":
-    cur.execute(sql, params)
-    con.commit()
-    print(json.dumps({"lastID": cur.lastrowid, "changes": cur.rowcount if cur.rowcount != -1 else 0}))
-elif mode=="get":
-    cur.execute(sql, params)
-    row=cur.fetchone()
-    cols=[d[0] for d in cur.description] if cur.description else []
-    print(json.dumps(dict(zip(cols,row)) if row else None))
-elif mode=="all":
-    cur.execute(sql, params)
-    rows=cur.fetchall()
-    cols=[d[0] for d in cur.description] if cur.description else []
-    print(json.dumps([dict(zip(cols,r)) for r in rows]))
-con.close()
-`;
+const DEFAULT_DB = {
+  users: [],
+  routes: [],
+  routeShares: [],
+  counters: { userId: 0, routeId: 0 }
+};
 
-  const output = execFileSync('python3', ['-c', script], {
-    input: payload,
-    encoding: 'utf8'
-  });
-  return output ? JSON.parse(output) : null;
+async function readDbState() {
+  try {
+    const raw = await fs.readFile(DB_JSON_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return {
+      users: Array.isArray(parsed.users) ? parsed.users : [],
+      routes: Array.isArray(parsed.routes) ? parsed.routes : [],
+      routeShares: Array.isArray(parsed.routeShares) ? parsed.routeShares : [],
+      counters: parsed.counters || { userId: 0, routeId: 0 }
+    };
+  } catch {
+    return JSON.parse(JSON.stringify(DEFAULT_DB));
+  }
 }
 
-function dbRun(sql, params = []) {
-  return Promise.resolve(runSqlite('run', sql, params));
+async function writeDbState(state) {
+  dbWriteQueue = dbWriteQueue.then(() => fs.writeFile(DB_JSON_FILE, JSON.stringify(state, null, 2)));
+  return dbWriteQueue;
 }
 
-function dbGet(sql, params = []) {
-  return Promise.resolve(runSqlite('get', sql, params));
+async function dbRun(sql, params = []) {
+  const state = await readDbState();
+
+  if (sql.startsWith('INSERT INTO users')) {
+    const [username, email, passwordHash] = params;
+    state.counters.userId += 1;
+    state.users.push({ id: state.counters.userId, username, email, password_hash: passwordHash, created_at: new Date().toISOString() });
+    await writeDbState(state);
+    return { lastID: state.counters.userId, changes: 1 };
+  }
+
+  if (sql.startsWith('INSERT OR IGNORE INTO users')) {
+    const [username, email, passwordHash] = params;
+    if (state.users.some((u) => u.email === email)) return { lastID: 0, changes: 0 };
+    state.counters.userId += 1;
+    state.users.push({ id: state.counters.userId, username, email, password_hash: passwordHash, created_at: new Date().toISOString() });
+    await writeDbState(state);
+    return { lastID: state.counters.userId, changes: 1 };
+  }
+
+  if (sql.startsWith('INSERT INTO routes')) {
+    const [userId, name, createdAt, payload] = params;
+    state.counters.routeId += 1;
+    state.routes.push({ id: state.counters.routeId, user_id: userId, name, created_at: createdAt, payload_json: payload });
+    await writeDbState(state);
+    return { lastID: state.counters.routeId, changes: 1 };
+  }
+
+  if (sql.startsWith('INSERT OR IGNORE INTO routes')) {
+    const [userId, name, createdAt, payload] = params;
+    if (state.routes.some((r) => r.user_id === userId && String(r.name).toLowerCase() === String(name).toLowerCase())) return { lastID: 0, changes: 0 };
+    state.counters.routeId += 1;
+    state.routes.push({ id: state.counters.routeId, user_id: userId, name, created_at: createdAt, payload_json: payload });
+    await writeDbState(state);
+    return { lastID: state.counters.routeId, changes: 1 };
+  }
+
+  if (sql.startsWith('DELETE FROM routes')) {
+    const [routeId, userId] = params;
+    const before = state.routes.length;
+    state.routes = state.routes.filter((r) => !(r.id === routeId && r.user_id === userId));
+    state.routeShares = state.routeShares.filter((s) => state.routes.some((r) => r.id === s.route_id));
+    await writeDbState(state);
+    return { lastID: 0, changes: before - state.routes.length };
+  }
+
+  if (sql.startsWith('INSERT INTO route_shares')) {
+    const [token, routeId, createdAt] = params;
+    state.routeShares.push({ token, route_id: routeId, created_at: createdAt });
+    await writeDbState(state);
+    return { lastID: 0, changes: 1 };
+  }
+
+  if (sql.startsWith('DELETE FROM users')) {
+    const [userId] = params;
+    const beforeUsers = state.users.length;
+    state.users = state.users.filter((u) => u.id !== userId);
+    const deletedRouteIds = state.routes.filter((r) => r.user_id === userId).map((r) => r.id);
+    state.routes = state.routes.filter((r) => r.user_id !== userId);
+    state.routeShares = state.routeShares.filter((s) => !deletedRouteIds.includes(s.route_id));
+    await writeDbState(state);
+    return { lastID: 0, changes: beforeUsers - state.users.length };
+  }
+
+  if (sql.startsWith('UPDATE users SET password_hash')) {
+    const [passwordHash, userId] = params;
+    let changes = 0;
+    state.users = state.users.map((u) => {
+      if (u.id !== userId) return u;
+      changes += 1;
+      return { ...u, password_hash: passwordHash };
+    });
+    await writeDbState(state);
+    return { lastID: 0, changes };
+  }
+
+  throw new Error(`Unsupported dbRun SQL: ${sql}`);
 }
 
-function dbAll(sql, params = []) {
-  return Promise.resolve(runSqlite('all', sql, params));
+async function dbGet(sql, params = []) {
+  const state = await readDbState();
+
+  if (sql.startsWith('SELECT COUNT(*) AS count FROM users')) return { count: state.users.length };
+  if (sql.startsWith('SELECT id FROM users WHERE email = ?')) {
+    const user = state.users.find((u) => u.email === params[0]);
+    return user ? { id: user.id } : null;
+  }
+  if (sql.startsWith('SELECT id, username, email FROM users WHERE email = ? OR username = ? LIMIT 1')) {
+    const user = state.users.find((u) => u.email === params[0] || u.username === params[1]);
+    return user ? { id: user.id, username: user.username, email: user.email } : null;
+  }
+  if (sql.startsWith('SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1')) {
+    const user = state.users.find((u) => u.email === params[0]);
+    return user || null;
+  }
+  if (sql.startsWith('SELECT id, username, email, password_hash FROM users WHERE username = ? LIMIT 1')) {
+    const user = state.users.find((u) => u.username === params[0]);
+    return user || null;
+  }
+  if (sql.startsWith('SELECT id, name, created_at, payload_json FROM routes WHERE id = ? AND user_id = ? LIMIT 1')) {
+    return state.routes.find((r) => r.id === params[0] && r.user_id === params[1]) || null;
+  }
+  if (sql.startsWith('SELECT id, name, created_at, payload_json FROM routes WHERE id = ?')) {
+    return state.routes.find((r) => r.id === params[0]) || null;
+  }
+  if (sql.startsWith('SELECT id FROM routes WHERE id = ? AND user_id = ? LIMIT 1')) {
+    const row = state.routes.find((r) => r.id === params[0] && r.user_id === params[1]);
+    return row ? { id: row.id } : null;
+  }
+  if (sql.startsWith('SELECT token FROM route_shares WHERE route_id = ? LIMIT 1')) {
+    const row = state.routeShares.find((s) => s.route_id === params[0]);
+    return row ? { token: row.token } : null;
+  }
+  if (sql.includes('FROM route_shares s') && sql.includes('JOIN routes r')) {
+    const share = state.routeShares.find((s) => s.token === params[0]);
+    if (!share) return null;
+    return state.routes.find((r) => r.id === share.route_id) || null;
+  }
+  if (sql.startsWith('SELECT id, password_hash FROM users WHERE id = ? LIMIT 1')) {
+    const user = state.users.find((u) => u.id === params[0]);
+    return user ? { id: user.id, password_hash: user.password_hash } : null;
+  }
+
+  throw new Error(`Unsupported dbGet SQL: ${sql}`);
+}
+
+async function dbAll(sql, params = []) {
+  const state = await readDbState();
+  if (sql.startsWith('SELECT id, name, created_at, payload_json FROM routes WHERE user_id = ?')) {
+    return state.routes
+      .filter((r) => r.user_id === params[0])
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id - b.id);
+  }
+  throw new Error(`Unsupported dbAll SQL: ${sql}`);
 }
 
 function dbExec(sql) {
-  runSqlite('exec', sql, []);
+  void sql;
   return Promise.resolve();
 }
 
