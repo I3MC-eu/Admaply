@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Shared Route • Admaply</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="home-shell">
+  <div class="home-header-card">
+    <div>
+      <h2 id="publicRouteTitle">Shared route</h2>
+      <p id="publicRouteMeta" class="muted">Loading…</p>
+    </div>
+    <div class="home-actions">
+      <button class="secondary-btn" onclick="window.location.href='index.html'">Back to app</button>
+    </div>
+  </div>
+
+  <div class="home-routes-card">
+    <div id="publicRoutePreview"></div>
+    <div id="publicRouteWaypoints" class="saved-route-list"></div>
+  </div>
+</div>
+
+<script>
+function safeText(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatDate(value) {
+  return new Date(value).toLocaleString();
+}
+
+function buildRouteMiniMap(waypoints) {
+  if (!Array.isArray(waypoints) || waypoints.length < 2) {
+    return '<div class="mini-map-empty">No preview</div>';
+  }
+
+  const width = 320;
+  const height = 160;
+  const pad = 16;
+  const lats = waypoints.map((wp) => wp.lat);
+  const lngs = waypoints.map((wp) => wp.lng);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const latSpan = Math.max(maxLat - minLat, 0.0001);
+  const lngSpan = Math.max(maxLng - minLng, 0.0001);
+
+  const points = waypoints.map((wp) => {
+    const x = pad + ((wp.lng - minLng) / lngSpan) * (width - pad * 2);
+    const y = height - pad - ((wp.lat - minLat) / latSpan) * (height - pad * 2);
+    return { x, y };
+  });
+
+  const polyline = points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="mini-map shared" role="img" aria-label="Shared route preview map">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="#11161b"></rect>
+      <polyline points="${polyline}" fill="none" stroke="#2ecc71" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </svg>
+  `;
+}
+
+async function init() {
+  const token = new URLSearchParams(window.location.search).get('token');
+  if (!token) {
+    document.getElementById('publicRouteMeta').textContent = 'Missing share token.';
+    return;
+  }
+
+  const res = await fetch(`/api/public/routes/${encodeURIComponent(token)}`);
+  const data = await res.json();
+  if (!res.ok || !data.route) {
+    document.getElementById('publicRouteMeta').textContent = data.error || 'Shared route not found.';
+    return;
+  }
+
+  const route = data.route;
+  document.getElementById('publicRouteTitle').textContent = route.name;
+  document.getElementById('publicRouteMeta').textContent = `${route.waypointCount} waypoints • ${formatDate(route.createdAt)}`;
+  document.getElementById('publicRoutePreview').innerHTML = buildRouteMiniMap(route.waypoints);
+  document.getElementById('publicRouteWaypoints').innerHTML = route.waypoints.map((wp, idx) => `
+    <div class="saved-route-card">
+      <div>
+        <h4>${idx + 1}. ${safeText(wp.name || 'Waypoint')}</h4>
+        <p>${Number(wp.lat).toFixed(5)}, ${Number(wp.lng).toFixed(5)}</p>
+      </div>
+    </div>
+  `).join('');
+}
+
+init();
+</script>
+</body>
+</html>
