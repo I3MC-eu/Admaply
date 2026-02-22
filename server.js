@@ -10,6 +10,12 @@ const DATA_DIR = path.join(ROOT, 'data');
 const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'admaply.db');
 const LEGACY_STORE_FILE = path.join(DATA_DIR, 'store.json');
 const sessions = new Map();
+const loginAttempts = new Map();
+
+const LOGIN_RATE_LIMIT = {
+  maxAttempts: 8,
+  windowMs: 10 * 60 * 1000
+};
 
 const DEFAULT_DEMO_USER = {
   username: 'demo',
@@ -40,6 +46,21 @@ const LIMITS = {
 };
 
 let db;
+
+function logEvent(level, event, details = {}) {
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    event,
+    ...details
+  };
+  const line = JSON.stringify(entry);
+  if (level === 'error') {
+    console.error(line);
+    return;
+  }
+  console.log(line);
+}
 
 function sanitizeText(value, maxLength) {
   const cleaned = String(value || '')
@@ -97,6 +118,41 @@ function parseCookies(req) {
     if (key && value) acc[key] = decodeURIComponent(value);
     return acc;
   }, {});
+}
+
+function getClientIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.socket.remoteAddress || 'unknown';
+}
+
+function getRateLimitState(req, identity) {
+  const ip = getClientIp(req);
+  const key = `${ip}|${String(identity || '').toLowerCase()}`;
+  const now = Date.now();
+  const current = loginAttempts.get(key);
+
+  if (!current || now - current.first > LOGIN_RATE_LIMIT.windowMs) {
+    const fresh = { count: 0, first: now };
+    loginAttempts.set(key, fresh);
+    return { key, state: fresh };
+  }
+
+  return { key, state: current };
+}
+
+function isLoginRateLimited(req, identity) {
+  const { state } = getRateLimitState(req, identity);
+  return state.count >= LOGIN_RATE_LIMIT.maxAttempts;
+}
+
+function recordFailedLogin(req, identity) {
+  const { state } = getRateLimitState(req, identity);
+  state.count += 1;
+}
+
+function clearFailedLogins(req, identity) {
+  const { key } = getRateLimitState(req, identity);
+  loginAttempts.delete(key);
 }
 
 function sendJson(res, code, payload, headers = {}) {
@@ -379,6 +435,7 @@ async function handler(req, res) {
 
     const newUser = { id: Number(result.lastInsertRowid), username, email };
     const sid = createSession(newUser);
+    logEvent('info', 'signup_success', { userId: newUser.id, email: newUser.email, ip: getClientIp(req) });
 
     return sendJson(
       res,
@@ -399,13 +456,24 @@ async function handler(req, res) {
       return sendJson(res, 400, { error: 'Email and password are required' });
     }
 
+    const identity = email || username;
+    if (isLoginRateLimited(req, identity)) {
+      logEvent('warn', 'login_rate_limited', { identity, ip: getClientIp(req) });
+      return sendJson(res, 429, { error: 'Too many login attempts. Please try again later.' });
+    }
+
     const user = email
       ? db.prepare('SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1').get(email)
       : db.prepare('SELECT id, username, email, password_hash FROM users WHERE username = ? LIMIT 1').get(username);
 
     if (!user || !verifyPassword(password, user.password_hash)) {
+      recordFailedLogin(req, identity);
+      logEvent('warn', 'login_failed', { identity, ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Invalid credentials' });
     }
+
+    clearFailedLogins(req, identity);
+    logEvent('info', 'login_success', { userId: user.id, email: user.email, ip: getClientIp(req) });
 
     const sid = createSession(user);
     const cookie = isDemoIdentity(user)
@@ -471,6 +539,7 @@ async function handler(req, res) {
           segmentModes: normalizeSegmentModes(body.segmentModes, cleanWaypoints.length)
         };
         userRoutes.push(entry);
+        logEvent('info', 'route_created', { userId: user.id || 'demo', routeId: entry.id, routeName, ip: getClientIp(req) });
         return sendJson(res, 200, { ok: true, route: entry });
       }
 
@@ -486,6 +555,7 @@ async function handler(req, res) {
         );
 
         const saved = db.prepare('SELECT id, name, created_at, payload_json FROM routes WHERE id = ?').get(Number(result.lastInsertRowid));
+        logEvent('info', 'route_created', { userId: user.id, routeId: Number(result.lastInsertRowid), routeName, ip: getClientIp(req) });
         return sendJson(res, 200, { ok: true, route: parseRoutePayload(saved) });
       } catch (error) {
         if (String(error.message || '').includes('UNIQUE constraint failed: routes.user_id, routes.name')) {
@@ -512,6 +582,42 @@ async function handler(req, res) {
       if (!row) return sendJson(res, 404, { error: 'Route not found' });
       return sendJson(res, 200, { route: parseRoutePayload(row) });
     }
+
+    if (pathname.startsWith('/api/routes/') && req.method === 'DELETE') {
+      const routeId = Number(pathname.split('/').pop());
+      if (!Number.isInteger(routeId)) return sendJson(res, 400, { error: 'Invalid route id' });
+
+      if (isDemoUser) {
+        const before = userRoutes.length;
+        const kept = userRoutes.filter((entry) => entry.id !== routeId);
+        user.demoRoutes = kept;
+        if (before === kept.length) return sendJson(res, 404, { error: 'Route not found' });
+        logEvent('info', 'route_deleted', { userId: user.id || 'demo', routeId, ip: getClientIp(req) });
+        return sendJson(res, 200, { ok: true });
+      }
+
+      const result = db.prepare('DELETE FROM routes WHERE id = ? AND user_id = ?').run(routeId, user.id);
+      if (result.changes < 1) return sendJson(res, 404, { error: 'Route not found' });
+      logEvent('info', 'route_deleted', { userId: user.id, routeId, ip: getClientIp(req) });
+      return sendJson(res, 200, { ok: true });
+    }
+  }
+
+  if (pathname === '/api/account' && req.method === 'DELETE') {
+    const user = getSessionUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+
+    const sid = parseCookies(req).sid;
+    if (sid) sessions.delete(sid);
+
+    if (isDemoIdentity(user)) {
+      logEvent('info', 'demo_account_session_deleted', { ip: getClientIp(req) });
+      return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' });
+    }
+
+    db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+    logEvent('info', 'account_deleted', { userId: user.id, email: user.email, ip: getClientIp(req) });
+    return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' });
   }
 
   return serveStatic(pathname, res);
@@ -519,7 +625,11 @@ async function handler(req, res) {
 
 const server = http.createServer((req, res) => {
   handler(req, res).catch((error) => {
-    console.error(error);
+    logEvent('error', 'server_error', {
+      method: req.method,
+      path: req.url,
+      message: String((error && error.message) || error || 'unknown')
+    });
     sendJson(res, 500, { error: 'Internal server error' });
   });
 });
