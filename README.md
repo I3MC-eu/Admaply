@@ -21,6 +21,9 @@ https://admaply.i3mc.fun/
 
 AdMaply is designed for hikers, road-trippers, explorers, and anyone who enjoys turning ideas into mapped-out plans.
 
+<img width="1266" height="648" alt="image" src="https://github.com/user-attachments/assets/a9b47ce3-d4fe-41bc-a0ab-9a3aadf1f23a" />
+<img width="1287" height="960" alt="image" src="https://github.com/user-attachments/assets/4bcf326a-1572-4bfa-b912-2908a400f04b" />
+
 ---
 
 ## 🛠 Tech Stack
