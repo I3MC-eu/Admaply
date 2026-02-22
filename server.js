@@ -5,7 +5,16 @@ const crypto = require('crypto');
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, 'data');
+const CAPROVER_DATA_DIR = '/captain/data';
+const DEFAULT_DATA_DIR = (() => {
+  try {
+    require('fs').accessSync(CAPROVER_DATA_DIR);
+    return CAPROVER_DATA_DIR;
+  } catch {
+    return path.join(ROOT, 'data');
+  }
+})();
+const DATA_DIR = process.env.DATA_DIR || DEFAULT_DATA_DIR;
 const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'admaply.db');
 const DB_JSON_FILE = process.env.DB_JSON_FILE || path.join(DATA_DIR, 'admaply.json');
 const DB_JSON_BAK_FILE = `${DB_JSON_FILE}.bak`;

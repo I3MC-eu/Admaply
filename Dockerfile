@@ -9,9 +9,11 @@ COPY . .
 
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV DB_FILE=/usr/src/app/data/admaply.db
+ENV DATA_DIR=/captain/data
+ENV DB_FILE=/captain/data/admaply.db
+ENV DB_JSON_FILE=/captain/data/admaply.json
 
-VOLUME ["/usr/src/app/data"]
+VOLUME ["/captain/data"]
 
 EXPOSE 3000
 
