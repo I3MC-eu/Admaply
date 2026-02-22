@@ -22,6 +22,10 @@
       <input id="routeNameInput" type="text" placeholder="e.g. Sunday Mountain Loop">
       <button class="secondary-btn" onclick="saveRoute()">Save Route</button>
       <button class="secondary-btn" onclick="loadLatestRoute()">Load Latest</button>
+      <button class="secondary-btn" onclick="undoLastWaypoint()">Undo Last Waypoint</button>
+      <button class="secondary-btn" onclick="exportGpx()">Export GPX</button>
+      <label class="file-upload-btn secondary-btn" for="gpxImportInput">Import GPX</label>
+      <input id="gpxImportInput" type="file" accept=".gpx,application/gpx+xml,text/xml,application/xml" style="display:none">
       <p id="plannerMessage" class="status-message"></p>
     </div>
 
@@ -346,6 +350,7 @@ function reindexExpandedSet(removedIndex) {
 }
 
 function removeWaypoint(index) {
+  if (!confirm('Delete this waypoint?')) return;
   if (waypoints.length <= 1) {
     waypoints = [];
     segmentModes = [];
@@ -367,6 +372,97 @@ function removeWaypoint(index) {
   waypointCounter = waypoints.length + 1;
   renderSidebar();
   updateRouting();
+}
+
+function undoLastWaypoint() {
+  if (!waypoints.length) {
+    setMessage('Nothing to undo.');
+    return;
+  }
+
+  waypoints.pop();
+  if (segmentModes.length) segmentModes.pop();
+  waypointCounter = waypoints.length + 1;
+  expandedWaypointSet.clear();
+  imageEditorWaypointSet.clear();
+  renderSidebar();
+  updateRouting();
+  setMessage('Removed last waypoint.');
+}
+
+function downloadTextFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function xmlEscape(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function exportGpx() {
+  if (waypoints.length < 2) {
+    setMessage('Need at least 2 waypoints to export GPX.');
+    return;
+  }
+
+  const routeName = currentRouteName() || 'Admaply Route';
+  const routePoints = waypoints.map((wp) => `    <rtept lat="${wp.latlng.lat}" lon="${wp.latlng.lng}"><name>${xmlEscape(wp.name)}</name></rtept>`).join('\n');
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Admaply" xmlns="http://www.topografix.com/GPX/1/1">\n  <rte>\n    <name>${xmlEscape(routeName)}</name>\n${routePoints}\n  </rte>\n</gpx>\n`;
+
+  const filename = `${routeName.replace(/[^a-z0-9-_]+/gi, '_').toLowerCase() || 'route'}.gpx`;
+  downloadTextFile(filename, gpx, 'application/gpx+xml');
+  setMessage('GPX exported.');
+}
+
+function parseGpxText(text) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('Invalid GPX file.');
+
+  const routeNameNode = doc.querySelector('rte > name, trk > name');
+  const routeName = routeNameNode ? routeNameNode.textContent.trim() : '';
+  const pts = Array.from(doc.querySelectorAll('rtept, trkpt'));
+  const parsed = pts.map((pt, idx) => {
+    const lat = Number(pt.getAttribute('lat'));
+    const lng = Number(pt.getAttribute('lon'));
+    const nameNode = pt.querySelector('name');
+    return {
+      latlng: L.latLng(lat, lng),
+      name: (nameNode && nameNode.textContent.trim()) || `Waypoint ${idx + 1}`,
+      linkItems: [],
+      images: [],
+      notes: []
+    };
+  }).filter((wp) => Number.isFinite(wp.latlng.lat) && Number.isFinite(wp.latlng.lng));
+
+  if (parsed.length < 2) throw new Error('GPX must contain at least 2 route points.');
+  return { routeName, points: parsed };
+}
+
+async function importGpxFile(file) {
+  const text = await file.text();
+  const parsed = parseGpxText(text);
+  waypoints = parsed.points;
+  segmentModes = Array.from({ length: Math.max(waypoints.length - 1, 0) }, () => 'road');
+  waypointCounter = waypoints.length + 1;
+  expandedWaypointSet.clear();
+  imageEditorWaypointSet.clear();
+  if (parsed.routeName) document.getElementById('routeNameInput').value = parsed.routeName;
+  renderSidebar();
+  updateRouting();
+  setMessage(`Imported GPX with ${waypoints.length} points.`);
 }
 
 function toggleWaypoint(index) {
@@ -567,6 +663,17 @@ async function loadRouteFromQuery() {
 }
 
 removeLegacyPlannerDuplicates();
+document.getElementById('gpxImportInput').addEventListener('change', async (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  try {
+    await importGpxFile(file);
+  } catch (error) {
+    setMessage(error.message || 'Failed to import GPX.');
+  } finally {
+    event.target.value = '';
+  }
+});
 
 (async function init() {
   const ok = await checkSession();

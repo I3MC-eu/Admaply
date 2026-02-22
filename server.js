@@ -335,6 +335,13 @@ function ensureSchema() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       UNIQUE(user_id, name)
     );
+
+    CREATE TABLE IF NOT EXISTS route_shares (
+      token TEXT PRIMARY KEY,
+      route_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE
+    );
   `);
 }
 
@@ -601,6 +608,47 @@ async function handler(req, res) {
       logEvent('info', 'route_deleted', { userId: user.id, routeId, ip: getClientIp(req) });
       return sendJson(res, 200, { ok: true });
     }
+
+    if (pathname.match(/^\/api\/routes\/\d+\/share$/) && req.method === 'POST') {
+      const routeId = Number(pathname.split('/')[3]);
+      if (!Number.isInteger(routeId)) return sendJson(res, 400, { error: 'Invalid route id' });
+
+      if (isDemoUser) {
+        const route = userRoutes.find((entry) => entry.id === routeId);
+        if (!route) return sendJson(res, 404, { error: 'Route not found' });
+        return sendJson(res, 400, { error: 'Demo routes cannot be shared publicly' });
+      }
+
+      const row = db.prepare('SELECT id FROM routes WHERE id = ? AND user_id = ? LIMIT 1').get(routeId, user.id);
+      if (!row) return sendJson(res, 404, { error: 'Route not found' });
+
+      const existing = db.prepare('SELECT token FROM route_shares WHERE route_id = ? LIMIT 1').get(routeId);
+      const token = existing ? existing.token : crypto.randomBytes(18).toString('hex');
+      if (!existing) {
+        db.prepare('INSERT INTO route_shares (token, route_id, created_at) VALUES (?, ?, ?)')
+          .run(token, routeId, new Date().toISOString());
+      }
+
+      const shareUrl = `${url.origin}/public-route.html?token=${encodeURIComponent(token)}`;
+      logEvent('info', 'route_shared', { userId: user.id, routeId, ip: getClientIp(req) });
+      return sendJson(res, 200, { ok: true, token, shareUrl });
+    }
+  }
+
+  if (pathname.startsWith('/api/public/routes/') && req.method === 'GET') {
+    const token = sanitizeText(pathname.split('/').pop(), 100);
+    if (!token) return sendJson(res, 400, { error: 'Invalid share token' });
+
+    const row = db.prepare(`
+      SELECT r.id, r.name, r.created_at, r.payload_json
+      FROM route_shares s
+      JOIN routes r ON r.id = s.route_id
+      WHERE s.token = ?
+      LIMIT 1
+    `).get(token);
+
+    if (!row) return sendJson(res, 404, { error: 'Shared route not found' });
+    return sendJson(res, 200, { route: summarizeRoute(parseRoutePayload(row)) });
   }
 
   if (pathname === '/api/account' && req.method === 'DELETE') {
@@ -618,6 +666,35 @@ async function handler(req, res) {
     db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
     logEvent('info', 'account_deleted', { userId: user.id, email: user.email, ip: getClientIp(req) });
     return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' });
+  }
+
+  if (pathname === '/api/account/password' && req.method === 'POST') {
+    const user = getSessionUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+    if (isDemoIdentity(user)) return sendJson(res, 400, { error: 'Demo account password cannot be changed' });
+
+    const body = await readJsonBody(req);
+    if (!body) return sendJson(res, 400, { error: 'Invalid JSON body' });
+
+    const currentPassword = String(body.currentPassword || '');
+    const newPassword = String(body.newPassword || '');
+    if (!currentPassword || !newPassword) {
+      return sendJson(res, 400, { error: 'Current and new passwords are required' });
+    }
+    if (newPassword.length < 8 || newPassword.length > LIMITS.password) {
+      return sendJson(res, 400, { error: 'New password must be between 8 and 128 characters' });
+    }
+
+    const existing = db.prepare('SELECT id, password_hash FROM users WHERE id = ? LIMIT 1').get(user.id);
+    if (!existing) return sendJson(res, 404, { error: 'Account not found' });
+    if (!verifyPassword(currentPassword, existing.password_hash)) {
+      logEvent('warn', 'password_change_failed', { userId: user.id, reason: 'invalid_current_password', ip: getClientIp(req) });
+      return sendJson(res, 401, { error: 'Current password is incorrect' });
+    }
+
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), user.id);
+    logEvent('info', 'password_changed', { userId: user.id, ip: getClientIp(req) });
+    return sendJson(res, 200, { ok: true });
   }
 
   return serveStatic(pathname, res);

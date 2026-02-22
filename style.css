@@ -144,6 +144,66 @@ body {
   cursor: pointer;
 }
 
+.profile-anchor {
+  position: relative;
+}
+
+.profile-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #11161b;
+  border: 1px solid var(--border);
+  margin-right: 8px;
+  font-size: 12px;
+}
+
+#profileBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-menu {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  width: min(360px, calc(100vw - 48px));
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  z-index: 1200;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.profile-menu.hidden {
+  display: none;
+}
+
+.profile-menu h4 {
+  margin: 0 0 8px;
+}
+
+.profile-menu label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 8px 0 4px;
+}
+
+.profile-menu input,
+.profile-menu button {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 6px;
+  padding: 10px;
+  border-radius: 8px;
+}
+
 .saved-route-list {
   display: flex;
   flex-direction: column;
@@ -177,12 +237,24 @@ body {
   cursor: pointer;
 }
 
+.route-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .mini-map {
   width: 220px;
   height: 120px;
   border: 1px solid var(--border);
   border-radius: 10px;
   flex-shrink: 0;
+}
+
+.mini-map.shared {
+  width: 100%;
+  max-width: 520px;
+  height: 220px;
 }
 
 .mini-map-empty {
@@ -319,6 +391,18 @@ body {
   color: var(--text-secondary);
   font-size: 10px;
   background: #0f1419;
+}
+
+.file-upload-btn {
+  display: inline-block;
+  text-align: center;
+  cursor: pointer;
+}
+
+.legal-card ul {
+  margin-top: 6px;
+  margin-bottom: 16px;
+  color: var(--text-secondary);
 }
 
 
