@@ -8,6 +8,9 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
 const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'admaply.db');
 const DB_JSON_FILE = process.env.DB_JSON_FILE || path.join(DATA_DIR, 'admaply.json');
+const DB_JSON_BAK_FILE = `${DB_JSON_FILE}.bak`;
+const DB_JSON_TMP_FILE = `${DB_JSON_FILE}.tmp`;
+const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
 const LEGACY_STORE_FILE = path.join(DATA_DIR, 'store.json');
 const sessions = new Map();
 const loginAttempts = new Map();
@@ -56,6 +59,7 @@ const DEFAULT_DB = {
 };
 
 async function readDbState() {
+  await dbWriteQueue;
   try {
     const raw = await fs.readFile(DB_JSON_FILE, 'utf8');
     const parsed = JSON.parse(raw);
@@ -66,12 +70,32 @@ async function readDbState() {
       counters: parsed.counters || { userId: 0, routeId: 0 }
     };
   } catch {
-    return JSON.parse(JSON.stringify(DEFAULT_DB));
+    try {
+      const backupRaw = await fs.readFile(DB_JSON_BAK_FILE, 'utf8');
+      const parsed = JSON.parse(backupRaw);
+      return {
+        users: Array.isArray(parsed.users) ? parsed.users : [],
+        routes: Array.isArray(parsed.routes) ? parsed.routes : [],
+        routeShares: Array.isArray(parsed.routeShares) ? parsed.routeShares : [],
+        counters: parsed.counters || { userId: 0, routeId: 0 }
+      };
+    } catch {
+      return JSON.parse(JSON.stringify(DEFAULT_DB));
+    }
   }
 }
 
 async function writeDbState(state) {
-  dbWriteQueue = dbWriteQueue.then(() => fs.writeFile(DB_JSON_FILE, JSON.stringify(state, null, 2)));
+  const payload = JSON.stringify(state, null, 2);
+  dbWriteQueue = dbWriteQueue.then(async () => {
+    await fs.writeFile(DB_JSON_TMP_FILE, payload);
+    try {
+      await fs.copyFile(DB_JSON_FILE, DB_JSON_BAK_FILE);
+    } catch {
+      // first write or no existing file yet
+    }
+    await fs.rename(DB_JSON_TMP_FILE, DB_JSON_FILE);
+  });
   return dbWriteQueue;
 }
 
@@ -567,6 +591,13 @@ async function migrateLegacyStoreIfNeeded() {
 async function initDatabase() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   db = { ready: true };
+
+  try {
+    await fs.access(DB_JSON_FILE);
+  } catch {
+    await writeDbState(JSON.parse(JSON.stringify(DEFAULT_DB)));
+  }
+
   await ensureSchema();
   await ensureDemoUser();
   await migrateLegacyStoreIfNeeded();
@@ -789,7 +820,8 @@ async function handler(req, res) {
         await dbRun('INSERT INTO route_shares (token, route_id, created_at) VALUES (?, ?, ?)', [token, routeId, new Date().toISOString()]);
       }
 
-      const shareUrl = `${url.origin}/public-route.html?token=${encodeURIComponent(token)}`;
+      const baseUrl = PUBLIC_BASE_URL || url.origin;
+      const shareUrl = `${baseUrl}/public-route.html?token=${encodeURIComponent(token)}`;
       logEvent('info', 'route_shared', { userId: user.id, routeId, ip: getClientIp(req) });
       return sendJson(res, 200, { ok: true, token, shareUrl });
     }
