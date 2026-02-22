@@ -17,6 +17,8 @@ const DEFAULT_DATA_DIR = (() => {
 const DATA_DIR = process.env.DATA_DIR || DEFAULT_DATA_DIR;
 const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'admaply.db');
 const DB_JSON_FILE = process.env.DB_JSON_FILE || path.join(DATA_DIR, 'admaply.json');
+const LEGACY_APP_DATA_DIR = path.join(ROOT, 'data');
+const LEGACY_DB_JSON_FILE = path.join(LEGACY_APP_DATA_DIR, 'admaply.json');
 const DB_JSON_BAK_FILE = `${DB_JSON_FILE}.bak`;
 const DB_JSON_TMP_FILE = `${DB_JSON_FILE}.tmp`;
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
@@ -604,7 +606,23 @@ async function initDatabase() {
   try {
     await fs.access(DB_JSON_FILE);
   } catch {
-    await writeDbState(JSON.parse(JSON.stringify(DEFAULT_DB)));
+    try {
+      if (DB_JSON_FILE !== LEGACY_DB_JSON_FILE) {
+        const legacyRaw = await fs.readFile(LEGACY_DB_JSON_FILE, 'utf8');
+        const parsed = JSON.parse(legacyRaw);
+        await writeDbState({
+          users: Array.isArray(parsed.users) ? parsed.users : [],
+          routes: Array.isArray(parsed.routes) ? parsed.routes : [],
+          routeShares: Array.isArray(parsed.routeShares) ? parsed.routeShares : [],
+          counters: parsed.counters || { userId: 0, routeId: 0 }
+        });
+        logEvent('info', 'data_migrated', { from: LEGACY_DB_JSON_FILE, to: DB_JSON_FILE });
+      } else {
+        await writeDbState(JSON.parse(JSON.stringify(DEFAULT_DB)));
+      }
+    } catch {
+      await writeDbState(JSON.parse(JSON.stringify(DEFAULT_DB)));
+    }
   }
 
   await ensureSchema();
@@ -737,10 +755,12 @@ async function handler(req, res) {
       const routeName = sanitizeText(body.name || `Route ${userRoutes.length + 1}`, LIMITS.routeName);
       if (!routeName) return sendJson(res, 400, { error: 'Route name is required' });
 
-      if (isDemoUser) {
-        const duplicate = userRoutes.some((route) => route.name.toLowerCase() === routeName.toLowerCase());
-        if (duplicate) return sendJson(res, 409, { error: 'A route with this name already exists. Please choose a different name.' });
+      const duplicate = userRoutes.some((route) => String(route.name || '').toLowerCase() === routeName.toLowerCase());
+      if (duplicate) {
+        return sendJson(res, 409, { error: 'A route with this name already exists. Please choose a different name.' });
+      }
 
+      if (isDemoUser) {
         const entry = {
           id: Date.now(),
           name: routeName,

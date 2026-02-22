@@ -13,7 +13,8 @@
 <div class="planner-layout">
   <div id="map"></div>
 
-  <div id="sidebar">
+  <div id="sidebar" class="collapsed">
+    <button id="sidebarToggle" class="sidebar-toggle" type="button" onclick="toggleSidebar()">▲ Planner Panel</button>
     <h3>Route Info</h3>
     <div id="routeInfo" class="route-info">Total Distance: –</div>
 
@@ -59,6 +60,42 @@ var segmentLayers = [];
 var expandedWaypointSet = new Set();
 var imageEditorWaypointSet = new Set();
 var draggedIndex = null;
+var sidebarExpanded = false;
+
+function toggleSidebar(forceExpand) {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.getElementById('sidebarToggle');
+  const isMobile = window.matchMedia('(max-width: 960px)').matches;
+
+  if (!isMobile) {
+    sidebarExpanded = true;
+    sidebar.classList.remove('collapsed');
+    toggle.textContent = 'Planner Panel';
+    map.invalidateSize();
+    return;
+  }
+
+  sidebarExpanded = typeof forceExpand === 'boolean' ? forceExpand : !sidebarExpanded;
+  sidebar.classList.toggle('collapsed', !sidebarExpanded);
+  toggle.textContent = sidebarExpanded ? '▼ Hide Planner Panel' : '▲ Planner Panel';
+  setTimeout(() => map.invalidateSize(), 260);
+}
+
+function handlePlannerLayoutMode() {
+  const isMobile = window.matchMedia('(max-width: 960px)').matches;
+  const toggle = document.getElementById('sidebarToggle');
+
+  if (isMobile) {
+    toggle.textContent = sidebarExpanded ? '▼ Hide Planner Panel' : '▲ Planner Panel';
+    document.getElementById('sidebar').classList.toggle('collapsed', !sidebarExpanded);
+  } else {
+    sidebarExpanded = true;
+    toggle.textContent = 'Planner Panel';
+    document.getElementById('sidebar').classList.remove('collapsed');
+  }
+
+  setTimeout(() => map.invalidateSize(), 120);
+}
 
 function removeLegacyPlannerDuplicates() {
   document.querySelectorAll('#routeInfo').forEach((node, index) => {
@@ -678,6 +715,9 @@ document.getElementById('gpxImportInput').addEventListener('change', async (even
 (async function init() {
   const ok = await checkSession();
   if (!ok) return;
+  sidebarExpanded = false;
+  handlePlannerLayoutMode();
+  window.addEventListener('resize', handlePlannerLayoutMode);
   await loadRouteFromQuery();
 })();
 </script>
