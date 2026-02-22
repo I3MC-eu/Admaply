@@ -906,6 +906,16 @@ const server = http.createServer((req, res) => {
 initDatabase().then(() => {
   server.listen(PORT, () => {
     console.log(`AdMaply server running on http://localhost:${PORT}`);
-    console.log(`SQLite DB: ${DB_FILE}`);
+    console.log(`Data store: ${DB_JSON_FILE}`);
   });
+});
+
+process.on('SIGTERM', () => {
+  logEvent('info', 'shutdown_signal', { signal: 'SIGTERM' });
+  server.close(() => process.exit(0));
+});
+
+process.on('SIGINT', () => {
+  logEvent('info', 'shutdown_signal', { signal: 'SIGINT' });
+  server.close(() => process.exit(0));
 });
