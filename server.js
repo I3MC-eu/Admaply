@@ -2,7 +2,7 @@ const http = require('http');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { DatabaseSync } = require('node:sqlite');
+const { execFileSync } = require('child_process');
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOT = __dirname;
@@ -46,6 +46,62 @@ const LIMITS = {
 };
 
 let db;
+
+function runSqlite(mode, sql, params = []) {
+  const payload = JSON.stringify({ dbFile: DB_FILE, mode, sql, params });
+  const script = `
+import json, sqlite3, sys
+req=json.loads(sys.stdin.read())
+con=sqlite3.connect(req["dbFile"])
+con.execute("PRAGMA foreign_keys = ON")
+cur=con.cursor()
+mode=req["mode"]
+sql=req["sql"]
+params=req["params"]
+if mode=="exec":
+    con.executescript(sql)
+    con.commit()
+    print(json.dumps({"ok": True}))
+elif mode=="run":
+    cur.execute(sql, params)
+    con.commit()
+    print(json.dumps({"lastID": cur.lastrowid, "changes": cur.rowcount if cur.rowcount != -1 else 0}))
+elif mode=="get":
+    cur.execute(sql, params)
+    row=cur.fetchone()
+    cols=[d[0] for d in cur.description] if cur.description else []
+    print(json.dumps(dict(zip(cols,row)) if row else None))
+elif mode=="all":
+    cur.execute(sql, params)
+    rows=cur.fetchall()
+    cols=[d[0] for d in cur.description] if cur.description else []
+    print(json.dumps([dict(zip(cols,r)) for r in rows]))
+con.close()
+`;
+
+  const output = execFileSync('python3', ['-c', script], {
+    input: payload,
+    encoding: 'utf8'
+  });
+  return output ? JSON.parse(output) : null;
+}
+
+function dbRun(sql, params = []) {
+  return Promise.resolve(runSqlite('run', sql, params));
+}
+
+function dbGet(sql, params = []) {
+  return Promise.resolve(runSqlite('get', sql, params));
+}
+
+function dbAll(sql, params = []) {
+  return Promise.resolve(runSqlite('all', sql, params));
+}
+
+function dbExec(sql) {
+  runSqlite('exec', sql, []);
+  return Promise.resolve();
+}
 
 function logEvent(level, event, details = {}) {
   const entry = {
@@ -284,11 +340,9 @@ function parseRoutePayload(row) {
   };
 }
 
-function getDbRoutesForUser(userId) {
-  return db
-    .prepare('SELECT id, name, created_at, payload_json FROM routes WHERE user_id = ? ORDER BY datetime(created_at) ASC, id ASC')
-    .all(userId)
-    .map(parseRoutePayload);
+async function getDbRoutesForUser(userId) {
+  const rows = await dbAll('SELECT id, name, created_at, payload_json FROM routes WHERE user_id = ? ORDER BY datetime(created_at) ASC, id ASC', [userId]);
+  return rows.map(parseRoutePayload);
 }
 
 async function serveStatic(pathname, res) {
@@ -314,8 +368,8 @@ async function serveStatic(pathname, res) {
   }
 }
 
-function ensureSchema() {
-  db.exec(`
+async function ensureSchema() {
+  await dbExec(`
     PRAGMA foreign_keys = ON;
 
     CREATE TABLE IF NOT EXISTS users (
@@ -345,19 +399,19 @@ function ensureSchema() {
   `);
 }
 
-function ensureDemoUser() {
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(DEFAULT_DEMO_USER.email);
+async function ensureDemoUser() {
+  const existing = await dbGet('SELECT id FROM users WHERE email = ?', [DEFAULT_DEMO_USER.email]);
   if (existing) return;
 
-  db.prepare('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)').run(
+  await dbRun('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)', [
     DEFAULT_DEMO_USER.username,
     DEFAULT_DEMO_USER.email,
     hashPassword(DEFAULT_DEMO_USER.password)
-  );
+  ]);
 }
 
 async function migrateLegacyStoreIfNeeded() {
-  const userCount = db.prepare('SELECT COUNT(*) AS count FROM users').get().count;
+  const userCount = (await dbGet('SELECT COUNT(*) AS count FROM users'))?.count || 0;
   if (userCount > 1) return;
 
   try {
@@ -365,19 +419,15 @@ async function migrateLegacyStoreIfNeeded() {
     const legacy = JSON.parse(raw);
     if (!Array.isArray(legacy.users)) return;
 
-    const insertUser = db.prepare('INSERT OR IGNORE INTO users (username, email, password_hash) VALUES (?, ?, ?)');
-    const findUser = db.prepare('SELECT id, username, email FROM users WHERE email = ? OR username = ? LIMIT 1');
-    const insertRoute = db.prepare('INSERT OR IGNORE INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)');
-
     for (const user of legacy.users) {
       const username = sanitizeText(user.username || user.email || 'user', LIMITS.username) || 'user';
       const email = String(user.email || '').trim().toLowerCase();
       if (!isValidEmail(email)) continue;
 
       const passwordHash = user.passwordHash || (user.password ? hashPassword(user.password) : hashPassword(crypto.randomBytes(12).toString('hex')));
-      insertUser.run(username, email, passwordHash);
+      await dbRun('INSERT OR IGNORE INTO users (username, email, password_hash) VALUES (?, ?, ?)', [username, email, passwordHash]);
 
-      const persisted = findUser.get(email, username);
+      const persisted = await dbGet('SELECT id, username, email FROM users WHERE email = ? OR username = ? LIMIT 1', [email, username]);
       if (!persisted || !legacy.routes) continue;
 
       const routeKeys = [email, username].map((value) => String(value || '').toLowerCase());
@@ -393,7 +443,7 @@ async function migrateLegacyStoreIfNeeded() {
           waypoints,
           segmentModes: normalizeSegmentModes(route.segmentModes, waypoints.length)
         });
-        insertRoute.run(persisted.id, name, route.createdAt || new Date().toISOString(), payload);
+        await dbRun('INSERT OR IGNORE INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)', [persisted.id, name, route.createdAt || new Date().toISOString(), payload]);
       }
     }
   } catch {
@@ -403,9 +453,9 @@ async function migrateLegacyStoreIfNeeded() {
 
 async function initDatabase() {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  db = new DatabaseSync(DB_FILE);
-  ensureSchema();
-  ensureDemoUser();
+  db = { ready: true };
+  await ensureSchema();
+  await ensureDemoUser();
   await migrateLegacyStoreIfNeeded();
 }
 
@@ -431,16 +481,16 @@ async function handler(req, res) {
       return sendJson(res, 400, { error: 'Password must be between 8 and 128 characters' });
     }
 
-    const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const exists = await dbGet('SELECT id FROM users WHERE email = ?', [email]);
     if (exists) return sendJson(res, 409, { error: 'Email already registered' });
 
-    const result = db.prepare('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)').run(
+    const result = await dbRun('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)', [
       username,
       email,
       hashPassword(password)
-    );
+    ]);
 
-    const newUser = { id: Number(result.lastInsertRowid), username, email };
+    const newUser = { id: Number(result.lastID), username, email };
     const sid = createSession(newUser);
     logEvent('info', 'signup_success', { userId: newUser.id, email: newUser.email, ip: getClientIp(req) });
 
@@ -470,8 +520,8 @@ async function handler(req, res) {
     }
 
     const user = email
-      ? db.prepare('SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1').get(email)
-      : db.prepare('SELECT id, username, email, password_hash FROM users WHERE username = ? LIMIT 1').get(username);
+      ? await dbGet('SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1', [email])
+      : await dbGet('SELECT id, username, email, password_hash FROM users WHERE username = ? LIMIT 1', [username]);
 
     if (!user || !verifyPassword(password, user.password_hash)) {
       recordFailedLogin(req, identity);
@@ -506,7 +556,7 @@ async function handler(req, res) {
     if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
 
     const isDemoUser = isDemoIdentity(user);
-    const userRoutes = isDemoUser ? user.demoRoutes : getDbRoutesForUser(user.id);
+    const userRoutes = isDemoUser ? user.demoRoutes : await getDbRoutesForUser(user.id);
 
     if (pathname === '/api/routes/latest' && req.method === 'GET') {
       const latest = userRoutes[userRoutes.length - 1] || null;
@@ -551,7 +601,7 @@ async function handler(req, res) {
       }
 
       try {
-        const result = db.prepare('INSERT INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)').run(
+        const result = await dbRun('INSERT INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)', [
           user.id,
           routeName,
           new Date().toISOString(),
@@ -559,10 +609,10 @@ async function handler(req, res) {
             waypoints: cleanWaypoints,
             segmentModes: normalizeSegmentModes(body.segmentModes, cleanWaypoints.length)
           })
-        );
+        ]);
 
-        const saved = db.prepare('SELECT id, name, created_at, payload_json FROM routes WHERE id = ?').get(Number(result.lastInsertRowid));
-        logEvent('info', 'route_created', { userId: user.id, routeId: Number(result.lastInsertRowid), routeName, ip: getClientIp(req) });
+        const saved = await dbGet('SELECT id, name, created_at, payload_json FROM routes WHERE id = ?', [Number(result.lastID)]);
+        logEvent('info', 'route_created', { userId: user.id, routeId: Number(result.lastID), routeName, ip: getClientIp(req) });
         return sendJson(res, 200, { ok: true, route: parseRoutePayload(saved) });
       } catch (error) {
         if (String(error.message || '').includes('UNIQUE constraint failed: routes.user_id, routes.name')) {
@@ -582,9 +632,7 @@ async function handler(req, res) {
         return sendJson(res, 200, { route });
       }
 
-      const row = db
-        .prepare('SELECT id, name, created_at, payload_json FROM routes WHERE id = ? AND user_id = ? LIMIT 1')
-        .get(routeId, user.id);
+      const row = await dbGet('SELECT id, name, created_at, payload_json FROM routes WHERE id = ? AND user_id = ? LIMIT 1', [routeId, user.id]);
 
       if (!row) return sendJson(res, 404, { error: 'Route not found' });
       return sendJson(res, 200, { route: parseRoutePayload(row) });
@@ -603,7 +651,7 @@ async function handler(req, res) {
         return sendJson(res, 200, { ok: true });
       }
 
-      const result = db.prepare('DELETE FROM routes WHERE id = ? AND user_id = ?').run(routeId, user.id);
+      const result = await dbRun('DELETE FROM routes WHERE id = ? AND user_id = ?', [routeId, user.id]);
       if (result.changes < 1) return sendJson(res, 404, { error: 'Route not found' });
       logEvent('info', 'route_deleted', { userId: user.id, routeId, ip: getClientIp(req) });
       return sendJson(res, 200, { ok: true });
@@ -619,14 +667,13 @@ async function handler(req, res) {
         return sendJson(res, 400, { error: 'Demo routes cannot be shared publicly' });
       }
 
-      const row = db.prepare('SELECT id FROM routes WHERE id = ? AND user_id = ? LIMIT 1').get(routeId, user.id);
+      const row = await dbGet('SELECT id FROM routes WHERE id = ? AND user_id = ? LIMIT 1', [routeId, user.id]);
       if (!row) return sendJson(res, 404, { error: 'Route not found' });
 
-      const existing = db.prepare('SELECT token FROM route_shares WHERE route_id = ? LIMIT 1').get(routeId);
+      const existing = await dbGet('SELECT token FROM route_shares WHERE route_id = ? LIMIT 1', [routeId]);
       const token = existing ? existing.token : crypto.randomBytes(18).toString('hex');
       if (!existing) {
-        db.prepare('INSERT INTO route_shares (token, route_id, created_at) VALUES (?, ?, ?)')
-          .run(token, routeId, new Date().toISOString());
+        await dbRun('INSERT INTO route_shares (token, route_id, created_at) VALUES (?, ?, ?)', [token, routeId, new Date().toISOString()]);
       }
 
       const shareUrl = `${url.origin}/public-route.html?token=${encodeURIComponent(token)}`;
@@ -639,13 +686,13 @@ async function handler(req, res) {
     const token = sanitizeText(pathname.split('/').pop(), 100);
     if (!token) return sendJson(res, 400, { error: 'Invalid share token' });
 
-    const row = db.prepare(`
+    const row = await dbGet(`
       SELECT r.id, r.name, r.created_at, r.payload_json
       FROM route_shares s
       JOIN routes r ON r.id = s.route_id
       WHERE s.token = ?
       LIMIT 1
-    `).get(token);
+    `, [token]);
 
     if (!row) return sendJson(res, 404, { error: 'Shared route not found' });
     return sendJson(res, 200, { route: summarizeRoute(parseRoutePayload(row)) });
@@ -663,7 +710,7 @@ async function handler(req, res) {
       return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' });
     }
 
-    db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+    await dbRun('DELETE FROM users WHERE id = ?', [user.id]);
     logEvent('info', 'account_deleted', { userId: user.id, email: user.email, ip: getClientIp(req) });
     return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' });
   }
@@ -685,14 +732,14 @@ async function handler(req, res) {
       return sendJson(res, 400, { error: 'New password must be between 8 and 128 characters' });
     }
 
-    const existing = db.prepare('SELECT id, password_hash FROM users WHERE id = ? LIMIT 1').get(user.id);
+    const existing = await dbGet('SELECT id, password_hash FROM users WHERE id = ? LIMIT 1', [user.id]);
     if (!existing) return sendJson(res, 404, { error: 'Account not found' });
     if (!verifyPassword(currentPassword, existing.password_hash)) {
       logEvent('warn', 'password_change_failed', { userId: user.id, reason: 'invalid_current_password', ip: getClientIp(req) });
       return sendJson(res, 401, { error: 'Current password is incorrect' });
     }
 
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), user.id);
+    await dbRun('UPDATE users SET password_hash = ? WHERE id = ?', [hashPassword(newPassword), user.id]);
     logEvent('info', 'password_changed', { userId: user.id, ip: getClientIp(req) });
     return sendJson(res, 200, { ok: true });
   }
