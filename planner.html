@@ -54,6 +54,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+<script src="routing-utils.js"></script>
 <script>
 var map = L.map('map').setView([48.2, 14.3], 10);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -193,10 +194,11 @@ function defaultSegmentMode() {
 function getRouteConfig(mode) {
   return mode === 'hike'
     ? {
+      // routed-hiking / routed-foot are preconfigured OSRM instances where
+      // the profile name in the URL is still "driving".
       endpoints: [
-        { serviceUrl: 'https://routing.openstreetmap.de/routed-hiking/route/v1', profile: 'foot' },
-        { serviceUrl: 'https://routing.openstreetmap.de/routed-foot/route/v1', profile: 'foot' },
-        { serviceUrl: 'https://router.project-osrm.org/route/v1', profile: 'driving' }
+        { serviceUrl: 'https://routing.openstreetmap.de/routed-hiking/route/v1', profile: 'driving' },
+        { serviceUrl: 'https://routing.openstreetmap.de/routed-foot/route/v1', profile: 'driving' }
       ],
       color: '#2ecc71'
     }
@@ -293,6 +295,48 @@ function updateRouting() {
       }
     }
 
+    async function attemptOpenRouteServiceHikeRoute() {
+      if (mode !== 'hike' || !window.RoutingUtils || !window.RoutingUtils.fetchOpenRouteServiceSegment) return false;
+      try {
+        const hikeRoute = await window.RoutingUtils.fetchOpenRouteServiceSegment(
+          { lat: wp1.latlng.lat, lng: wp1.latlng.lng },
+          { lat: wp2.latlng.lat, lng: wp2.latlng.lng }
+        );
+        if (!hikeRoute || !hikeRoute.coordinates || hikeRoute.coordinates.length < 2) return false;
+
+        const poly = L.polyline(hikeRoute.coordinates, { color: config.color, weight: 4 }).addTo(map);
+        segmentLayers.push(poly);
+        totalDistance += hikeRoute.distanceMeters;
+        if (hikeRoute.instructions.length) {
+          allInstructions = allInstructions.concat(hikeRoute.instructions);
+        } else {
+          allInstructions.push({ text: 'Hiking route segment', distance: hikeRoute.distanceMeters });
+        }
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    async function attemptTrailGraphRoute() {
+      if (mode !== 'hike' || !window.RoutingUtils || !window.RoutingUtils.fetchTrailRouteSegment) return false;
+      try {
+        const trailRoute = await window.RoutingUtils.fetchTrailRouteSegment(
+          { lat: wp1.latlng.lat, lng: wp1.latlng.lng },
+          { lat: wp2.latlng.lat, lng: wp2.latlng.lng }
+        );
+        if (!trailRoute || !trailRoute.coordinates || trailRoute.coordinates.length < 2) return false;
+
+        const poly = L.polyline(trailRoute.coordinates, { color: config.color, weight: 4 }).addTo(map);
+        segmentLayers.push(poly);
+        totalDistance += trailRoute.distanceMeters;
+        allInstructions.push({ text: 'Hiking trail segment', distance: trailRoute.distanceMeters });
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
     function attemptRoute(serviceIndex) {
       const control = createRouteControl(wp1, wp2, config, config.endpoints[serviceIndex]);
       segmentLayers.push(control);
@@ -320,7 +364,19 @@ function updateRouting() {
       });
     }
 
-    attemptRoute(0);
+    attemptOpenRouteServiceHikeRoute().then((handledByOrs) => {
+      if (handledByOrs) {
+        finalizeSegment();
+        return;
+      }
+      attemptTrailGraphRoute().then((handledByGraph) => {
+        if (handledByGraph) {
+          finalizeSegment();
+          return;
+        }
+        attemptRoute(0);
+      });
+    });
   }
 }
 

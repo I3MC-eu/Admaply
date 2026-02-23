@@ -23,6 +23,7 @@ const DB_JSON_BAK_FILE = `${DB_JSON_FILE}.bak`;
 const DB_JSON_TMP_FILE = `${DB_JSON_FILE}.tmp`;
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
 const LEGACY_STORE_FILE = path.join(DATA_DIR, 'store.json');
+const OPENROUTESERVICE_API_KEY = String(process.env.OPENROUTESERVICE_API_KEY || '').trim();
 const sessions = new Map();
 const loginAttempts = new Map();
 
@@ -720,6 +721,71 @@ async function handler(req, res) {
     const sid = parseCookies(req).sid;
     if (sid) sessions.delete(sid);
     return sendJson(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' });
+  }
+
+  if (pathname === '/api/routing/hiking' && req.method === 'GET') {
+    const user = getSessionUser(req);
+    if (!user) return sendJson(res, 401, { error: 'Unauthorized' });
+
+    if (!OPENROUTESERVICE_API_KEY) {
+      return sendJson(res, 503, { error: 'OpenRouteService hiking profile is not configured.' });
+    }
+
+    const startRaw = String(url.searchParams.get('start') || '');
+    const endRaw = String(url.searchParams.get('end') || '');
+
+    const [startLat, startLng] = startRaw.split(',').map(Number);
+    const [endLat, endLng] = endRaw.split(',').map(Number);
+
+    if (![startLat, startLng, endLat, endLng].every(Number.isFinite)) {
+      return sendJson(res, 400, { error: 'Invalid start/end coordinates.' });
+    }
+
+    const orsRes = await fetch('https://api.openrouteservice.org/v2/directions/foot-hiking/geojson', {
+      method: 'POST',
+      headers: {
+        'Authorization': OPENROUTESERVICE_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        coordinates: [[startLng, startLat], [endLng, endLat]],
+        instructions: true,
+        elevation: false,
+        preference: 'recommended'
+      })
+    });
+
+    const payload = await orsRes.json().catch(() => null);
+    if (!orsRes.ok || !payload) {
+      return sendJson(res, orsRes.status || 502, {
+        error: (payload && payload.error && payload.error.message) || 'OpenRouteService request failed.'
+      });
+    }
+
+    const feature = payload.features && payload.features[0];
+    const summary = feature && feature.properties && feature.properties.summary;
+    const segments = feature && feature.properties && feature.properties.segments;
+    const geometry = feature && feature.geometry;
+
+    if (!geometry || !Array.isArray(geometry.coordinates) || !summary) {
+      return sendJson(res, 502, { error: 'Invalid hiking route response.' });
+    }
+
+    const instructions = Array.isArray(segments)
+      ? segments.flatMap((segment) => Array.isArray(segment.steps) ? segment.steps : [])
+      : [];
+
+    return sendJson(res, 200, {
+      route: {
+        distanceMeters: Number(summary.distance) || 0,
+        durationSeconds: Number(summary.duration) || 0,
+        coordinates: geometry.coordinates.map((c) => ({ lat: c[1], lng: c[0] })),
+        instructions: instructions.map((step) => ({
+          text: String(step.instruction || 'Continue'),
+          distance: Number(step.distance) || 0
+        }))
+      }
+    });
   }
 
   if (pathname.startsWith('/api/routes')) {
