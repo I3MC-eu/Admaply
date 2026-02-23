@@ -74,7 +74,7 @@ Make sure these files are at the root of the archive (not inside another folder)
 
 AdMaply is a personal development project and not a commercial service or registered company.
 
-The application is hosted in an EU data center (Germany, Contabo). However, it is not designed to store sensitive personal information.
+The application is hosted in an EU data center (located in Germany). However, it is not designed to store sensitive personal information.
 
 Please do not store:
 
