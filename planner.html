@@ -180,30 +180,37 @@ map.on('click', function(e) {
     notes: []
   });
   waypointCounter++;
-  if (waypoints.length >= 2) segmentModes.push('road');
+  if (waypoints.length >= 2) segmentModes.push(defaultSegmentMode());
   markDirty();
   renderSidebar();
   updateRouting();
 });
 
+function defaultSegmentMode() {
+  return 'hike';
+}
+
 function getRouteConfig(mode) {
   return mode === 'hike'
     ? {
-      serviceUrls: [
-        'https://routing.openstreetmap.de/routed-hiking/route/v1',
-        'https://routing.openstreetmap.de/routed-foot/route/v1',
-        'https://router.project-osrm.org/route/v1'
+      endpoints: [
+        { serviceUrl: 'https://routing.openstreetmap.de/routed-hiking/route/v1', profile: 'foot' },
+        { serviceUrl: 'https://routing.openstreetmap.de/routed-foot/route/v1', profile: 'foot' },
+        { serviceUrl: 'https://router.project-osrm.org/route/v1', profile: 'driving' }
       ],
       color: '#2ecc71'
     }
-    : { serviceUrls: ['https://router.project-osrm.org/route/v1'], color: '#e74c3c' };
+    : {
+      endpoints: [{ serviceUrl: 'https://router.project-osrm.org/route/v1', profile: 'driving' }],
+      color: '#e74c3c'
+    };
 }
 
-function createRouteControl(wp1, wp2, config, serviceUrl) {
+function createRouteControl(wp1, wp2, config, endpoint) {
 
   return L.Routing.control({
     waypoints: [wp1.latlng, wp2.latlng],
-    router: L.Routing.osrmv1({ serviceUrl }),
+    router: L.Routing.osrmv1({ serviceUrl: endpoint.serviceUrl, profile: endpoint.profile }),
     addWaypoints: false,
     draggableWaypoints: false,
     show: false,
@@ -273,7 +280,7 @@ function updateRouting() {
   for (let i = 0; i < waypoints.length - 1; i++) {
     const wp1 = waypoints[i];
     const wp2 = waypoints[i + 1];
-    const mode = segmentModes[i] || 'road';
+    const mode = segmentModes[i] || defaultSegmentMode();
     const config = getRouteConfig(mode);
 
     pending++;
@@ -287,7 +294,7 @@ function updateRouting() {
     }
 
     function attemptRoute(serviceIndex) {
-      const control = createRouteControl(wp1, wp2, config, config.serviceUrls[serviceIndex]);
+      const control = createRouteControl(wp1, wp2, config, config.endpoints[serviceIndex]);
       segmentLayers.push(control);
 
       control.on('routesfound', function(e) {
@@ -299,7 +306,7 @@ function updateRouting() {
 
       control.on('routingerror', function() {
         control.remove();
-        if (serviceIndex + 1 < config.serviceUrls.length) {
+        if (serviceIndex + 1 < config.endpoints.length) {
           attemptRoute(serviceIndex + 1);
           return;
         }
@@ -358,12 +365,12 @@ function onDrop(index, event) {
   waypoints.splice(index, 0, moved);
 
   // Segment mode semantics depend on adjacency; reset safely after reorder.
-  segmentModes = Array.from({ length: Math.max(waypoints.length - 1, 0) }, () => 'road');
+  segmentModes = Array.from({ length: Math.max(waypoints.length - 1, 0) }, () => defaultSegmentMode());
   expandedWaypointSet = new Set([index]);
   draggedIndex = null;
   markDirty();
 
-  setMessage('Waypoints reordered. Segment transport modes reset to Road.');
+  setMessage('Waypoints reordered. Segment transport modes reset to Hike.');
   renderSidebar();
   updateRouting();
 }
@@ -386,7 +393,7 @@ function renderSidebar() {
 
     let segmentControl = '';
     if (index < waypoints.length - 1) {
-      const mode = segmentModes[index] || 'road';
+      const mode = segmentModes[index] || defaultSegmentMode();
       segmentControl =
         "<select class='segment-select' id='segmentMode_" + index + "' onchange='setSegmentMode(" + index + ", this.value)' onclick='event.stopPropagation()'>" +
         "<option value='road'" + (mode === 'road' ? ' selected' : '') + ">🚗 Road</option>" +
@@ -601,7 +608,7 @@ async function importGpxFile(file) {
   const text = await file.text();
   const parsed = parseGpxText(text);
   waypoints = parsed.points;
-  segmentModes = Array.from({ length: Math.max(waypoints.length - 1, 0) }, () => 'road');
+  segmentModes = Array.from({ length: Math.max(waypoints.length - 1, 0) }, () => defaultSegmentMode());
   waypointCounter = waypoints.length + 1;
   expandedWaypointSet.clear();
   imageEditorWaypointSet.clear();
@@ -654,6 +661,7 @@ function editImageUrl(index, imageIndex, value) {
   waypoints[index].images[imageIndex] = value;
   expandedWaypointSet.add(index);
   imageEditorWaypointSet.add(index);
+  markDirty();
   renderSidebar();
 }
 
@@ -752,7 +760,7 @@ function loadWaypoints(saved, savedSegmentModes) {
 
   const needed = Math.max(waypoints.length - 1, 0);
   const cleanModes = Array.isArray(savedSegmentModes) ? savedSegmentModes : [];
-  segmentModes = Array.from({ length: needed }, (_, idx) => (cleanModes[idx] === 'hike' ? 'hike' : 'road'));
+  segmentModes = Array.from({ length: needed }, (_, idx) => (cleanModes[idx] === 'road' ? 'road' : defaultSegmentMode()));
 
   waypointCounter = waypoints.length + 1;
   markSaved();
