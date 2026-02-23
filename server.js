@@ -79,34 +79,29 @@ async function dbRun(sql, params = []) {
     return { lastID: result.insertId || 0, changes: result.affectedRows };
   }
 
-  if (sql.startsWith('INSERT INTO routes')) {
-    const [result] = await mysqlPool.execute(
-      'INSERT INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)',
-      params
-    );
-    return { lastID: result.insertId, changes: result.affectedRows };
-  }
+if (
+  sql.startsWith('INSERT INTO routes') ||
+  sql.startsWith('INSERT IGNORE INTO routes') ||
+  sql.startsWith('INSERT OR IGNORE INTO routes')
+) {
+  const normalizedSql = sql.replace('INSERT OR IGNORE', 'INSERT IGNORE');
+  const [result] = await mysqlPool.execute(normalizedSql, params);
+  return { lastID: result.insertId || 0, changes: result.affectedRows };
+}
 
-  if (sql.startsWith('INSERT OR IGNORE INTO routes')) {
-    const [result] = await mysqlPool.execute(
-      'INSERT IGNORE INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)',
-      params
-    );
-    return { lastID: result.insertId || 0, changes: result.affectedRows };
-  }
+if (sql.startsWith('DELETE FROM routes')) {
+  const [result] = await mysqlPool.execute(sql, params);
+  return { lastID: 0, changes: result.affectedRows };
+}
 
-  if (sql.startsWith('DELETE FROM routes')) {
-    const [result] = await mysqlPool.execute('DELETE FROM routes WHERE id = ? AND user_id = ?', params);
-    return { lastID: 0, changes: result.affectedRows };
-  }
-
-  if (sql.startsWith('INSERT INTO route_shares')) {
-    const [result] = await mysqlPool.execute(
-      'INSERT INTO route_shares (token, route_id, created_at) VALUES (?, ?, ?)',
-      params
-    );
-    return { lastID: 0, changes: result.affectedRows };
-  }
+if (
+  sql.startsWith('INSERT INTO route_shares') ||
+  sql.startsWith('INSERT IGNORE INTO route_shares')
+) {
+  const normalizedSql = sql.replace('INSERT OR IGNORE', 'INSERT IGNORE');
+  const [result] = await mysqlPool.execute(normalizedSql, params);
+  return { lastID: 0, changes: result.affectedRows };
+}
 
   if (sql.startsWith('DELETE FROM users')) {
     const [result] = await mysqlPool.execute('DELETE FROM users WHERE id = ?', params);
@@ -467,17 +462,23 @@ async function ensureSchema() {
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
       user_id BIGINT UNSIGNED NOT NULL,
       name VARCHAR(80) NOT NULL,
-      created_at DATETIME NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       payload_json LONGTEXT NOT NULL,
       UNIQUE KEY uq_routes_user_name (user_id, name),
-      CONSTRAINT fk_routes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      CONSTRAINT fk_routes_user
+        FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS route_shares (
       token VARCHAR(255) NOT NULL PRIMARY KEY,
       route_id BIGINT UNSIGNED NOT NULL,
-      created_at DATETIME NOT NULL,
-      CONSTRAINT fk_route_shares_route FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT fk_route_shares_route
+        FOREIGN KEY (route_id)
+        REFERENCES routes(id)
+        ON DELETE CASCADE
     );
   `);
 }
@@ -526,7 +527,10 @@ async function migrateLegacyStoreIfNeeded() {
           waypoints,
           segmentModes: normalizeSegmentModes(route.segmentModes, waypoints.length)
         });
-        await dbRun('INSERT OR IGNORE INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)', [persisted.id, name, route.createdAt || new Date().toISOString(), payload]);
+        await dbRun(
+  'INSERT IGNORE INTO routes (user_id, name, payload_json) VALUES (?, ?, ?)',
+  [persisted.id, name, payload]
+);
       }
     }
   } catch {
@@ -765,15 +769,17 @@ async function handler(req, res) {
       }
 
       try {
-        const result = await dbRun('INSERT INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)', [
-          user.id,
-          routeName,
-          new Date().toISOString(),
-          JSON.stringify({
-            waypoints: cleanWaypoints,
-            segmentModes: normalizeSegmentModes(body.segmentModes, cleanWaypoints.length)
-          })
-        ]);
+  const result = await dbRun(
+    'INSERT INTO routes (user_id, name, payload_json) VALUES (?, ?, ?)',
+    [
+      user.id,
+      routeName,
+      JSON.stringify({
+        waypoints: cleanWaypoints,
+        segmentModes: normalizeSegmentModes(body.segmentModes, cleanWaypoints.length)
+      })
+    ]
+  );
 
         const saved = await dbGet('SELECT id, name, created_at, payload_json FROM routes WHERE id = ?', [Number(result.lastID)]);
         logEvent('info', 'route_created', { userId: user.id, routeId: Number(result.lastID), routeName, ip: getClientIp(req) });
@@ -837,7 +843,10 @@ async function handler(req, res) {
       const existing = await dbGet('SELECT token FROM route_shares WHERE route_id = ? LIMIT 1', [routeId]);
       const token = existing ? existing.token : crypto.randomBytes(18).toString('hex');
       if (!existing) {
-        await dbRun('INSERT INTO route_shares (token, route_id, created_at) VALUES (?, ?, ?)', [token, routeId, new Date().toISOString()]);
+        await dbRun(
+  'INSERT INTO route_shares (token, route_id) VALUES (?, ?)',
+  [token, routeId]
+);
       }
 
       const baseUrl = PUBLIC_BASE_URL || url.origin;
