@@ -1,4 +1,4 @@
-# AdMaply
+<img width="1447" height="1232" alt="image" src="https://github.com/user-attachments/assets/3b823800-9563-4d95-a3e6-a827d504e257" /><img width="1447" height="1232" alt="image" src="https://github.com/user-attachments/assets/3b823800-9563-4d95-a3e6-a827d504e257" /># AdMaply
 v0.3.0 </br>
 AdMaply is a lightweight adventure planning platform that helps you map, organize, and structure your journeys in one place. </br>
 Live under: </br>
@@ -23,7 +23,7 @@ This is a work in Progress! Please Report any issues.
 AdMaply is designed for hikers, road-trippers, explorers, and anyone who enjoys turning ideas into mapped-out plans.
 
 <img width="1266" height="648" alt="image" src="https://github.com/user-attachments/assets/a9b47ce3-d4fe-41bc-a0ab-9a3aadf1f23a" />
-<img width="1287" height="960" alt="image" src="https://github.com/user-attachments/assets/4bcf326a-1572-4bfa-b912-2908a400f04b" />
+<img width="1447" height="1232" alt="image" src="https://github.com/user-attachments/assets/7488b2da-7097-4756-a06f-bcb71a121993" />
 
 ---
 
