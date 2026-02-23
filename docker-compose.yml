@@ -1,0 +1,31 @@
+version: '3'
+
+services:
+  db:
+    image: mysql:8.4
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: admaply
+      MYSQL_USER: admaply
+      MYSQL_PASSWORD: strongpassword
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  api:
+    build: .
+    restart: always
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: mysql://admaply:strongpassword@db:3306/admaply
+      DATA_DIR: /app-data
+    ports:
+      - "3000:3000"
+    volumes:
+      - admaply_data:/app-data
+
+volumes:
+  mysql_data:
+  admaply_data:
