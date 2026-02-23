@@ -68,3 +68,28 @@ To deploy via CapRover, upload a `.tar` archive containing:
 - application source files
 
 Make sure these files are at the root of the archive (not inside another folder).
+---
+
+## Data & Privacy Notice
+
+AdMaply is a personal development project and not a commercial service or registered company.
+
+The application is hosted in an EU data center (Germany, Contabo). However, it is not designed to store sensitive personal information.
+
+Please do not store:
+
+Full legal names
+
+Phone numbers
+
+Private addresses
+
+Government IDs
+
+Sensitive personal data
+
+Private or confidential images
+
+AdMaply is currently a private, experimental project and does not provide the security guarantees of a fully audited, production-grade platform.
+
+Use it for routes, adventures, and creative planning — not for confidential information.
