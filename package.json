@@ -1,0 +1,10 @@
+{
+  "name": "admaply",
+  "version": "1.0.0",
+  "description": "AdMaply backend-enabled planner",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
