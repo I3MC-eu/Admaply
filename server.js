@@ -2,6 +2,7 @@ const http = require('http');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const mysql = require('mysql2/promise');
 
 const PORT = Number(process.env.PORT) || 3000;
 const ROOT = __dirname;
@@ -15,12 +16,8 @@ const DEFAULT_DATA_DIR = (() => {
   }
 })();
 const DATA_DIR = process.env.DATA_DIR || DEFAULT_DATA_DIR;
-const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'admaply.db');
-const DB_JSON_FILE = process.env.DB_JSON_FILE || path.join(DATA_DIR, 'admaply.json');
+const DATABASE_URL = String(process.env.DATABASE_URL || process.env.MYSQL_URL || '').trim();
 const LEGACY_APP_DATA_DIR = path.join(ROOT, 'data');
-const LEGACY_DB_JSON_FILE = path.join(LEGACY_APP_DATA_DIR, 'admaply.json');
-const DB_JSON_BAK_FILE = `${DB_JSON_FILE}.bak`;
-const DB_JSON_TMP_FILE = `${DB_JSON_FILE}.tmp`;
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
 const LEGACY_STORE_FILE = path.join(DATA_DIR, 'store.json');
 const OPENROUTESERVICE_API_KEY = String(process.env.OPENROUTESERVICE_API_KEY || '').trim();
@@ -61,195 +58,134 @@ const LIMITS = {
 };
 
 let db;
-let dbWriteQueue = Promise.resolve();
-
-const DEFAULT_DB = {
-  users: [],
-  routes: [],
-  routeShares: [],
-  counters: { userId: 0, routeId: 0 }
-};
-
-async function readDbState() {
-  await dbWriteQueue;
-  try {
-    const raw = await fs.readFile(DB_JSON_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    return {
-      users: Array.isArray(parsed.users) ? parsed.users : [],
-      routes: Array.isArray(parsed.routes) ? parsed.routes : [],
-      routeShares: Array.isArray(parsed.routeShares) ? parsed.routeShares : [],
-      counters: parsed.counters || { userId: 0, routeId: 0 }
-    };
-  } catch {
-    try {
-      const backupRaw = await fs.readFile(DB_JSON_BAK_FILE, 'utf8');
-      const parsed = JSON.parse(backupRaw);
-      return {
-        users: Array.isArray(parsed.users) ? parsed.users : [],
-        routes: Array.isArray(parsed.routes) ? parsed.routes : [],
-        routeShares: Array.isArray(parsed.routeShares) ? parsed.routeShares : [],
-        counters: parsed.counters || { userId: 0, routeId: 0 }
-      };
-    } catch {
-      return JSON.parse(JSON.stringify(DEFAULT_DB));
-    }
-  }
-}
-
-async function writeDbState(state) {
-  const payload = JSON.stringify(state, null, 2);
-  dbWriteQueue = dbWriteQueue.then(async () => {
-    await fs.writeFile(DB_JSON_TMP_FILE, payload);
-    try {
-      await fs.copyFile(DB_JSON_FILE, DB_JSON_BAK_FILE);
-    } catch {
-      // first write or no existing file yet
-    }
-    await fs.rename(DB_JSON_TMP_FILE, DB_JSON_FILE);
-  });
-  return dbWriteQueue;
-}
+let mysqlPool;
 
 async function dbRun(sql, params = []) {
-  const state = await readDbState();
+  if (!mysqlPool) throw new Error('Database not initialized');
 
   if (sql.startsWith('INSERT INTO users')) {
-    const [username, email, passwordHash] = params;
-    state.counters.userId += 1;
-    state.users.push({ id: state.counters.userId, username, email, password_hash: passwordHash, created_at: new Date().toISOString() });
-    await writeDbState(state);
-    return { lastID: state.counters.userId, changes: 1 };
+    const [result] = await mysqlPool.execute(
+      'INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
+      params
+    );
+    return { lastID: result.insertId, changes: result.affectedRows };
   }
 
   if (sql.startsWith('INSERT OR IGNORE INTO users')) {
-    const [username, email, passwordHash] = params;
-    if (state.users.some((u) => u.email === email)) return { lastID: 0, changes: 0 };
-    state.counters.userId += 1;
-    state.users.push({ id: state.counters.userId, username, email, password_hash: passwordHash, created_at: new Date().toISOString() });
-    await writeDbState(state);
-    return { lastID: state.counters.userId, changes: 1 };
+    const [result] = await mysqlPool.execute(
+      'INSERT IGNORE INTO users (username, email, password_hash) VALUES (?, ?, ?)',
+      params
+    );
+    return { lastID: result.insertId || 0, changes: result.affectedRows };
   }
 
   if (sql.startsWith('INSERT INTO routes')) {
-    const [userId, name, createdAt, payload] = params;
-    state.counters.routeId += 1;
-    state.routes.push({ id: state.counters.routeId, user_id: userId, name, created_at: createdAt, payload_json: payload });
-    await writeDbState(state);
-    return { lastID: state.counters.routeId, changes: 1 };
+    const [result] = await mysqlPool.execute(
+      'INSERT INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)',
+      params
+    );
+    return { lastID: result.insertId, changes: result.affectedRows };
   }
 
   if (sql.startsWith('INSERT OR IGNORE INTO routes')) {
-    const [userId, name, createdAt, payload] = params;
-    if (state.routes.some((r) => r.user_id === userId && String(r.name).toLowerCase() === String(name).toLowerCase())) return { lastID: 0, changes: 0 };
-    state.counters.routeId += 1;
-    state.routes.push({ id: state.counters.routeId, user_id: userId, name, created_at: createdAt, payload_json: payload });
-    await writeDbState(state);
-    return { lastID: state.counters.routeId, changes: 1 };
+    const [result] = await mysqlPool.execute(
+      'INSERT IGNORE INTO routes (user_id, name, created_at, payload_json) VALUES (?, ?, ?, ?)',
+      params
+    );
+    return { lastID: result.insertId || 0, changes: result.affectedRows };
   }
 
   if (sql.startsWith('DELETE FROM routes')) {
-    const [routeId, userId] = params;
-    const before = state.routes.length;
-    state.routes = state.routes.filter((r) => !(r.id === routeId && r.user_id === userId));
-    state.routeShares = state.routeShares.filter((s) => state.routes.some((r) => r.id === s.route_id));
-    await writeDbState(state);
-    return { lastID: 0, changes: before - state.routes.length };
+    const [result] = await mysqlPool.execute('DELETE FROM routes WHERE id = ? AND user_id = ?', params);
+    return { lastID: 0, changes: result.affectedRows };
   }
 
   if (sql.startsWith('INSERT INTO route_shares')) {
-    const [token, routeId, createdAt] = params;
-    state.routeShares.push({ token, route_id: routeId, created_at: createdAt });
-    await writeDbState(state);
-    return { lastID: 0, changes: 1 };
+    const [result] = await mysqlPool.execute(
+      'INSERT INTO route_shares (token, route_id, created_at) VALUES (?, ?, ?)',
+      params
+    );
+    return { lastID: 0, changes: result.affectedRows };
   }
 
   if (sql.startsWith('DELETE FROM users')) {
-    const [userId] = params;
-    const beforeUsers = state.users.length;
-    state.users = state.users.filter((u) => u.id !== userId);
-    const deletedRouteIds = state.routes.filter((r) => r.user_id === userId).map((r) => r.id);
-    state.routes = state.routes.filter((r) => r.user_id !== userId);
-    state.routeShares = state.routeShares.filter((s) => !deletedRouteIds.includes(s.route_id));
-    await writeDbState(state);
-    return { lastID: 0, changes: beforeUsers - state.users.length };
+    const [result] = await mysqlPool.execute('DELETE FROM users WHERE id = ?', params);
+    return { lastID: 0, changes: result.affectedRows };
   }
 
   if (sql.startsWith('UPDATE users SET password_hash')) {
-    const [passwordHash, userId] = params;
-    let changes = 0;
-    state.users = state.users.map((u) => {
-      if (u.id !== userId) return u;
-      changes += 1;
-      return { ...u, password_hash: passwordHash };
-    });
-    await writeDbState(state);
-    return { lastID: 0, changes };
+    const [result] = await mysqlPool.execute('UPDATE users SET password_hash = ? WHERE id = ?', params);
+    return { lastID: 0, changes: result.affectedRows };
   }
 
   throw new Error(`Unsupported dbRun SQL: ${sql}`);
 }
 
 async function dbGet(sql, params = []) {
-  const state = await readDbState();
+  if (!mysqlPool) throw new Error('Database not initialized');
 
-  if (sql.startsWith('SELECT COUNT(*) AS count FROM users')) return { count: state.users.length };
-  if (sql.startsWith('SELECT id FROM users WHERE email = ?')) {
-    const user = state.users.find((u) => u.email === params[0]);
-    return user ? { id: user.id } : null;
-  }
+  let query = sql;
+  if (sql.startsWith('SELECT COUNT(*) AS count FROM users')) query = 'SELECT COUNT(*) AS count FROM users';
+  if (sql.startsWith('SELECT id FROM users WHERE email = ?')) query = 'SELECT id FROM users WHERE email = ? LIMIT 1';
   if (sql.startsWith('SELECT id, username, email FROM users WHERE email = ? OR username = ? LIMIT 1')) {
-    const user = state.users.find((u) => u.email === params[0] || u.username === params[1]);
-    return user ? { id: user.id, username: user.username, email: user.email } : null;
+    query = 'SELECT id, username, email FROM users WHERE email = ? OR username = ? LIMIT 1';
   }
   if (sql.startsWith('SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1')) {
-    const user = state.users.find((u) => u.email === params[0]);
-    return user || null;
+    query = 'SELECT id, username, email, password_hash FROM users WHERE email = ? LIMIT 1';
   }
   if (sql.startsWith('SELECT id, username, email, password_hash FROM users WHERE username = ? LIMIT 1')) {
-    const user = state.users.find((u) => u.username === params[0]);
-    return user || null;
+    query = 'SELECT id, username, email, password_hash FROM users WHERE username = ? LIMIT 1';
   }
   if (sql.startsWith('SELECT id, name, created_at, payload_json FROM routes WHERE id = ? AND user_id = ? LIMIT 1')) {
-    return state.routes.find((r) => r.id === params[0] && r.user_id === params[1]) || null;
+    query = 'SELECT id, name, created_at, payload_json FROM routes WHERE id = ? AND user_id = ? LIMIT 1';
   }
   if (sql.startsWith('SELECT id, name, created_at, payload_json FROM routes WHERE id = ?')) {
-    return state.routes.find((r) => r.id === params[0]) || null;
+    query = 'SELECT id, name, created_at, payload_json FROM routes WHERE id = ? LIMIT 1';
   }
   if (sql.startsWith('SELECT id FROM routes WHERE id = ? AND user_id = ? LIMIT 1')) {
-    const row = state.routes.find((r) => r.id === params[0] && r.user_id === params[1]);
-    return row ? { id: row.id } : null;
+    query = 'SELECT id FROM routes WHERE id = ? AND user_id = ? LIMIT 1';
   }
   if (sql.startsWith('SELECT token FROM route_shares WHERE route_id = ? LIMIT 1')) {
-    const row = state.routeShares.find((s) => s.route_id === params[0]);
-    return row ? { token: row.token } : null;
+    query = 'SELECT token FROM route_shares WHERE route_id = ? LIMIT 1';
   }
   if (sql.includes('FROM route_shares s') && sql.includes('JOIN routes r')) {
-    const share = state.routeShares.find((s) => s.token === params[0]);
-    if (!share) return null;
-    return state.routes.find((r) => r.id === share.route_id) || null;
+    query = `SELECT r.id, r.name, r.created_at, r.payload_json
+      FROM route_shares s
+      JOIN routes r ON r.id = s.route_id
+      WHERE s.token = ?
+      LIMIT 1`;
   }
   if (sql.startsWith('SELECT id, password_hash FROM users WHERE id = ? LIMIT 1')) {
-    const user = state.users.find((u) => u.id === params[0]);
-    return user ? { id: user.id, password_hash: user.password_hash } : null;
+    query = 'SELECT id, password_hash FROM users WHERE id = ? LIMIT 1';
   }
 
-  throw new Error(`Unsupported dbGet SQL: ${sql}`);
+  const [rows] = await mysqlPool.execute(query, params);
+  return rows[0] || null;
 }
 
 async function dbAll(sql, params = []) {
-  const state = await readDbState();
+  if (!mysqlPool) throw new Error('Database not initialized');
   if (sql.startsWith('SELECT id, name, created_at, payload_json FROM routes WHERE user_id = ?')) {
-    return state.routes
-      .filter((r) => r.user_id === params[0])
-      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime() || a.id - b.id);
+    const [rows] = await mysqlPool.execute(
+      'SELECT id, name, created_at, payload_json FROM routes WHERE user_id = ? ORDER BY created_at ASC, id ASC',
+      params
+    );
+    return rows;
   }
   throw new Error(`Unsupported dbAll SQL: ${sql}`);
 }
 
-function dbExec(sql) {
-  void sql;
-  return Promise.resolve();
+async function dbExec(sql) {
+  if (!mysqlPool) throw new Error('Database not initialized');
+  const statements = String(sql)
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((stmt) => !stmt.toUpperCase().startsWith('PRAGMA '));
+
+  for (const stmt of statements) {
+    await mysqlPool.query(stmt);
+  }
 }
 
 function logEvent(level, event, details = {}) {
@@ -519,31 +455,29 @@ async function serveStatic(pathname, res) {
 
 async function ensureSchema() {
   await dbExec(`
-    PRAGMA foreign_keys = ON;
-
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      username VARCHAR(60) NOT NULL,
+      email VARCHAR(160) NOT NULL UNIQUE,
+      password_hash VARCHAR(255) NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS routes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      name TEXT NOT NULL COLLATE NOCASE,
-      created_at TEXT NOT NULL,
-      payload_json TEXT NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      UNIQUE(user_id, name)
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      user_id BIGINT UNSIGNED NOT NULL,
+      name VARCHAR(80) NOT NULL,
+      created_at DATETIME NOT NULL,
+      payload_json LONGTEXT NOT NULL,
+      UNIQUE KEY uq_routes_user_name (user_id, name),
+      CONSTRAINT fk_routes_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS route_shares (
-      token TEXT PRIMARY KEY,
-      route_id INTEGER NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE
+      token VARCHAR(255) NOT NULL PRIMARY KEY,
+      route_id BIGINT UNSIGNED NOT NULL,
+      created_at DATETIME NOT NULL,
+      CONSTRAINT fk_route_shares_route FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE
     );
   `);
 }
@@ -602,29 +536,20 @@ async function migrateLegacyStoreIfNeeded() {
 
 async function initDatabase() {
   await fs.mkdir(DATA_DIR, { recursive: true });
-  db = { ready: true };
 
-  try {
-    await fs.access(DB_JSON_FILE);
-  } catch {
-    try {
-      if (DB_JSON_FILE !== LEGACY_DB_JSON_FILE) {
-        const legacyRaw = await fs.readFile(LEGACY_DB_JSON_FILE, 'utf8');
-        const parsed = JSON.parse(legacyRaw);
-        await writeDbState({
-          users: Array.isArray(parsed.users) ? parsed.users : [],
-          routes: Array.isArray(parsed.routes) ? parsed.routes : [],
-          routeShares: Array.isArray(parsed.routeShares) ? parsed.routeShares : [],
-          counters: parsed.counters || { userId: 0, routeId: 0 }
-        });
-        logEvent('info', 'data_migrated', { from: LEGACY_DB_JSON_FILE, to: DB_JSON_FILE });
-      } else {
-        await writeDbState(JSON.parse(JSON.stringify(DEFAULT_DB)));
-      }
-    } catch {
-      await writeDbState(JSON.parse(JSON.stringify(DEFAULT_DB)));
-    }
+  if (!DATABASE_URL) {
+    throw new Error('DATABASE_URL (or MYSQL_URL) is required. Example: mysql://user:pass@host:3306/admaply');
   }
+
+  mysqlPool = mysql.createPool({
+    uri: DATABASE_URL,
+    waitForConnections: true,
+    connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
+    queueLimit: 0,
+    decimalNumbers: true
+  });
+
+  db = { ready: true };
 
   await ensureSchema();
   await ensureDemoUser();
@@ -1001,16 +926,16 @@ const server = http.createServer((req, res) => {
 initDatabase().then(() => {
   server.listen(PORT, () => {
     console.log(`AdMaply server running on http://localhost:${PORT}`);
-    console.log(`Data store: ${DB_JSON_FILE}`);
+    console.log(`Database: ${DATABASE_URL.replace(/:[^:@/]+@/, ':***@')}`);
   });
 });
 
 process.on('SIGTERM', () => {
   logEvent('info', 'shutdown_signal', { signal: 'SIGTERM' });
-  server.close(() => process.exit(0));
+  server.close(async () => { if (mysqlPool) await mysqlPool.end(); process.exit(0); });
 });
 
 process.on('SIGINT', () => {
   logEvent('info', 'shutdown_signal', { signal: 'SIGINT' });
-  server.close(() => process.exit(0));
+  server.close(async () => { if (mysqlPool) await mysqlPool.end(); process.exit(0); });
 });
