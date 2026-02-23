@@ -55,3 +55,11 @@ Code of Conduct
 
 Be respectful and constructive in discussions.
 This project values clarity, curiosity, and technical honesty.
+
+AI-Assisted Development
+
+Parts of this project were developed with the help of AI coding tools, primarily OpenAI’s Codex. Codex and similar tools can accelerate writing boilerplate or exploratory code, but all contributions are reviewed, tested, and guided by a human developer.
+
+Using AI tools does not replace human understanding. You should verify that any code added or modified meets the project’s quality, security, and style standards.
+
+If you contribute to this project using AI tools, please be transparent about your usage in your pull request description — mention which tools you used and how they assisted (e.g., code suggestion vs. documentation generation).
