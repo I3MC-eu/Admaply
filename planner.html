@@ -6,25 +6,40 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <link rel="stylesheet" href="style.css">
-  <link rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
 
 <div class="planner-layout">
-
   <div id="map"></div>
 
-  <div id="sidebar">
+  <div id="sidebar" class="collapsed">
+    <button id="sidebarToggle" class="sidebar-toggle" type="button" onclick="toggleSidebar()">▲ Planner Panel</button>
     <h3>Route Info</h3>
-    <div id="routeInfo" class="route-info">
-      Total Distance: –
+    <div id="routeInfo" class="route-info">Total Distance: –</div>
+
+    <div class="planner-actions">
+      <label for="pathModeSelect">Path Mode</label>
+      <select id="pathModeSelect" onchange="setPathMode(this.value)">
+        <option value="snap_paths">Snap to paths (incl. alpine-friendly)</option>
+        <option value="free_draw">Free draw</option>
+        <option value="straight_lines">Straight lines</option>
+      </select>
+      <label for="routeNameInput">Route Name</label>
+      <input id="routeNameInput" type="text" placeholder="e.g. Sunday Mountain Loop">
+      <button class="secondary-btn" onclick="saveRoute()">Save Route</button>
+      <button class="secondary-btn" onclick="loadLatestRoute()">Load Latest</button>
+      <button class="secondary-btn" onclick="undoLastWaypoint()">Undo Last Waypoint</button>
+      <button class="secondary-btn" onclick="exportGpx()">Export GPX</button>
+      <label class="file-upload-btn secondary-btn" for="gpxImportInput">Import GPX</label>
+      <input id="gpxImportInput" type="file" accept=".gpx,application/gpx+xml,text/xml,application/xml" style="display:none">
+      <p id="plannerMessage" class="status-message"></p>
     </div>
 
     <h3>Waypoints</h3>
+    <p class="muted drag-hint">Drag waypoint cards to reorder.</p>
     <div id="waypointList"></div>
   </div>
-
 </div>
 
 <div id="floatingDirections" class="floating-directions collapsed">
@@ -38,240 +53,742 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
-
 <script>
-
-/* ================= MAP ================= */
-
 var map = L.map('map').setView([48.2, 14.3], 10);
-
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '&copy; OpenStreetMap contributors'
 }).addTo(map);
 
-
-/* ================= STATE ================= */
-
 var waypoints = [];
+var segmentModes = [];
 var waypointCounter = 1;
 var segmentLayers = [];
+var expandedWaypointSet = new Set();
+var imageEditorWaypointSet = new Set();
+var draggedIndex = null;
+var sidebarExpanded = false;
+var pathMode = 'snap_paths';
 
+function toggleSidebar(forceExpand) {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.getElementById('sidebarToggle');
+  const isMobile = window.matchMedia('(max-width: 960px)').matches;
 
-/* ================= ADD WAYPOINT ================= */
+  if (!isMobile) {
+    sidebarExpanded = true;
+    sidebar.classList.remove('collapsed');
+    toggle.textContent = 'Planner Panel';
+    map.invalidateSize();
+    return;
+  }
+
+  sidebarExpanded = typeof forceExpand === 'boolean' ? forceExpand : !sidebarExpanded;
+  sidebar.classList.toggle('collapsed', !sidebarExpanded);
+  toggle.textContent = sidebarExpanded ? '▼ Hide Planner Panel' : '▲ Planner Panel';
+  setTimeout(() => map.invalidateSize(), 260);
+}
+
+function handlePlannerLayoutMode() {
+  const isMobile = window.matchMedia('(max-width: 960px)').matches;
+  const toggle = document.getElementById('sidebarToggle');
+
+  if (isMobile) {
+    toggle.textContent = sidebarExpanded ? '▼ Hide Planner Panel' : '▲ Planner Panel';
+    document.getElementById('sidebar').classList.toggle('collapsed', !sidebarExpanded);
+  } else {
+    sidebarExpanded = true;
+    toggle.textContent = 'Planner Panel';
+    document.getElementById('sidebar').classList.remove('collapsed');
+  }
+
+  setTimeout(() => map.invalidateSize(), 120);
+}
+
+function removeLegacyPlannerDuplicates() {
+  document.querySelectorAll('#routeInfo').forEach((node, index) => {
+    if (index > 0) node.remove();
+  });
+  document.querySelectorAll('#waypointList').forEach((node, index) => {
+    if (index > 0) node.remove();
+  });
+  const actionPanel = document.querySelector('.planner-actions');
+  if (actionPanel) {
+    actionPanel.querySelectorAll('.route-info').forEach((node) => node.remove());
+  }
+}
+
+function setMessage(text) {
+  document.getElementById('plannerMessage').textContent = text;
+}
+
+function currentRouteName() {
+  return document.getElementById('routeNameInput').value.trim();
+}
+
+function safeText(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function checkSession() {
+  const res = await fetch('/api/session');
+  const data = await res.json();
+  if (!data.loggedIn) {
+    window.location.href = 'index.html';
+    return false;
+  }
+  return true;
+}
 
 map.on('click', function(e) {
-
   waypoints.push({
     latlng: e.latlng,
-    name: "Waypoint " + waypointCounter,
-    url: "",
-    notes: ""
+    name: 'Waypoint ' + waypointCounter,
+    linkItems: [],
+    images: [],
+    notes: []
   });
-
   waypointCounter++;
+  if (waypoints.length >= 2) segmentModes.push('road');
   renderSidebar();
   updateRouting();
 });
 
+function getRouteConfig(mode) {
+  return mode === 'hike'
+    ? {
+      serviceUrls: [
+        'https://routing.openstreetmap.de/routed-hiking/route/v1',
+        'https://routing.openstreetmap.de/routed-foot/route/v1',
+        'https://router.project-osrm.org/route/v1'
+      ],
+      color: '#2ecc71'
+    }
+    : { serviceUrls: ['https://router.project-osrm.org/route/v1'], color: '#e74c3c' };
+}
 
-/* ================= ROUTING ================= */
+function createRouteControl(wp1, wp2, config, serviceUrl) {
+
+  return L.Routing.control({
+    waypoints: [wp1.latlng, wp2.latlng],
+    router: L.Routing.osrmv1({ serviceUrl }),
+    addWaypoints: false,
+    draggableWaypoints: false,
+    show: false,
+    createMarker: function() { return null; },
+    lineOptions: { styles: [{ color: config.color, weight: 4 }] }
+  }).addTo(map);
+}
+
+function setPathMode(mode) {
+  pathMode = mode;
+  const modeLabel = mode === 'snap_paths'
+    ? 'Snap to paths'
+    : (mode === 'free_draw' ? 'Free draw' : 'Straight lines');
+  setMessage(`Path mode: ${modeLabel}`);
+  updateRouting();
+}
+
+function drawDirectSegments(label) {
+  let totalDistance = 0;
+  const steps = [];
+
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const wp1 = waypoints[i];
+    const wp2 = waypoints[i + 1];
+    const dist = wp1.latlng.distanceTo(wp2.latlng);
+    totalDistance += dist;
+
+    const style = label === 'Free draw'
+      ? { color: '#4aa3ff', weight: 4 }
+      : { color: '#f39c12', weight: 4, dashArray: '6,6' };
+    segmentLayers.push(L.polyline([wp1.latlng, wp2.latlng], style).addTo(map));
+    steps.push({ text: `${label} segment`, distance: dist });
+  }
+
+  updateRouteInfo(totalDistance);
+  renderDirections(steps);
+}
 
 function updateRouting() {
-
-  segmentLayers.forEach(layer => {
-    if (layer instanceof L.Routing.Control) {
-      layer.remove();
-    } else {
-      map.removeLayer(layer);
-    }
+  segmentLayers.forEach((layer) => {
+    if (layer instanceof L.Routing.Control) layer.remove();
+    else map.removeLayer(layer);
   });
 
   segmentLayers = [];
-
   let totalDistance = 0;
   let allInstructions = [];
-  let pendingRoadSegments = 0;
+  let pending = 0;
 
   if (waypoints.length < 2) {
-    document.getElementById("routeInfo").innerHTML =
-      "Total Distance: –";
-    document.getElementById("directionsList").innerHTML =
-      "No route yet.";
+    document.getElementById('routeInfo').innerHTML = 'Total Distance: –';
+    document.getElementById('directionsList').innerHTML = 'No route yet.';
+    return;
+  }
+
+  if (pathMode === 'free_draw') {
+    drawDirectSegments('Free draw');
+    return;
+  }
+
+  if (pathMode === 'straight_lines') {
+    drawDirectSegments('Straight line');
     return;
   }
 
   for (let i = 0; i < waypoints.length - 1; i++) {
-
     const wp1 = waypoints[i];
-    const wp2 = waypoints[i+1];
+    const wp2 = waypoints[i + 1];
+    const mode = segmentModes[i] || 'road';
+    const config = getRouteConfig(mode);
 
-    const select = document.getElementById("segmentMode_" + i);
-    const mode = select ? select.value : "road";
+    pending++;
 
-    if (mode === "road") {
+    function finalizeSegment() {
+      pending--;
+      if (pending === 0) {
+        updateRouteInfo(totalDistance);
+        renderDirections(allInstructions);
+      }
+    }
 
-      pendingRoadSegments++;
-
-      const control = L.Routing.control({
-        waypoints: [wp1.latlng, wp2.latlng],
-        router: L.Routing.osrmv1({
-          serviceUrl: 'https://router.project-osrm.org/route/v1'
-        }),
-        addWaypoints: false,
-        draggableWaypoints: false,
-        show: false,
-        createMarker: function() { return null; },
-        lineOptions: {
-          styles: [{ color: '#e74c3c', weight: 4 }]
-        }
-      }).addTo(map);
-
+    function attemptRoute(serviceIndex) {
+      const control = createRouteControl(wp1, wp2, config, config.serviceUrls[serviceIndex]);
       segmentLayers.push(control);
 
       control.on('routesfound', function(e) {
-
         const route = e.routes[0];
-
         totalDistance += route.summary.totalDistance;
         allInstructions = allInstructions.concat(route.instructions);
-
-        pendingRoadSegments--;
-
-        if (pendingRoadSegments === 0) {
-          updateRouteInfo(totalDistance);
-          renderDirections(allInstructions);
-        }
+        finalizeSegment();
       });
 
-    } else {
-
-      const line = L.polyline(
-        [wp1.latlng, wp2.latlng],
-        {
-          color: '#2ecc71',
-          weight: 4,
-          dashArray: '6,6'
+      control.on('routingerror', function() {
+        control.remove();
+        if (serviceIndex + 1 < config.serviceUrls.length) {
+          attemptRoute(serviceIndex + 1);
+          return;
         }
-      ).addTo(map);
 
-      segmentLayers.push(line);
-
-      const dist = wp1.latlng.distanceTo(wp2.latlng);
-      totalDistance += dist;
-
-      allInstructions.push({
-        text: "Direct segment (hike/off-road)",
-        distance: dist
+        const fallback = L.polyline([wp1.latlng, wp2.latlng], { color: '#f39c12', weight: 4, dashArray: '6,6' }).addTo(map);
+        segmentLayers.push(fallback);
+        const dist = wp1.latlng.distanceTo(wp2.latlng);
+        totalDistance += dist;
+        allInstructions.push({ text: `Fallback direct segment (${mode})`, distance: dist });
+        finalizeSegment();
       });
     }
-  }
 
-  if (pendingRoadSegments === 0) {
-    updateRouteInfo(totalDistance);
-    renderDirections(allInstructions);
+    attemptRoute(0);
   }
 }
 
 function updateRouteInfo(distanceMeters) {
-  const km = (distanceMeters / 1000).toFixed(2);
-  document.getElementById("routeInfo").innerHTML =
-    "Total Distance: " + km + " km";
+  document.getElementById('routeInfo').innerHTML = 'Total Distance: ' + (distanceMeters / 1000).toFixed(2) + ' km';
 }
 
+function onDragStart(index, event) {
+  draggedIndex = index;
+  event.dataTransfer.effectAllowed = 'move';
+}
 
-/* ================= SIDEBAR ================= */
+function onDragOver(event) {
+  event.preventDefault();
+}
+
+function onDragEnter(event, index) {
+  event.preventDefault();
+  const cards = document.querySelectorAll('.wp-item');
+  if (cards[index]) cards[index].classList.add('drag-target');
+}
+
+function onDragLeave(index) {
+  const cards = document.querySelectorAll('.wp-item');
+  if (cards[index]) cards[index].classList.remove('drag-target');
+}
+
+function onDrop(index, event) {
+  event.preventDefault();
+  const cards = document.querySelectorAll('.wp-item');
+  if (cards[index]) cards[index].classList.remove('drag-target');
+
+  if (draggedIndex === null || draggedIndex === index) return;
+
+  const moved = waypoints.splice(draggedIndex, 1)[0];
+  waypoints.splice(index, 0, moved);
+
+  // Segment mode semantics depend on adjacency; reset safely after reorder.
+  segmentModes = Array.from({ length: Math.max(waypoints.length - 1, 0) }, () => 'road');
+  expandedWaypointSet = new Set([index]);
+  draggedIndex = null;
+
+  setMessage('Waypoints reordered. Segment transport modes reset to Road.');
+  renderSidebar();
+  updateRouting();
+}
 
 function renderSidebar() {
-
-  const container = document.getElementById("waypointList");
-  container.innerHTML = "";
+  const container = document.getElementById('waypointList');
+  container.innerHTML = '';
 
   waypoints.forEach((wp, index) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'wp-item';
+    wrapper.draggable = true;
+    wrapper.addEventListener('dragstart', (event) => onDragStart(index, event));
+    wrapper.addEventListener('dragover', onDragOver);
+    wrapper.addEventListener('dragenter', (event) => onDragEnter(event, index));
+    wrapper.addEventListener('dragleave', () => onDragLeave(index));
+    wrapper.addEventListener('drop', (event) => onDrop(index, event));
 
-    const wrapper = document.createElement("div");
-    wrapper.className = "wp-item";
+    if (expandedWaypointSet.has(index)) wrapper.classList.add('expanded');
 
-    let segmentControl = "";
-
+    let segmentControl = '';
     if (index < waypoints.length - 1) {
+      const mode = segmentModes[index] || 'road';
       segmentControl =
-        "<select class='segment-select' id='segmentMode_" + index + "' onchange='updateRouting()'>" +
-        "<option value='road'>🚗 Road</option>" +
-        "<option value='direct'>🥾 Direct</option>" +
-        "</select>";
+        "<select class='segment-select' id='segmentMode_" + index + "' onchange='setSegmentMode(" + index + ", this.value)' onclick='event.stopPropagation()'>" +
+        "<option value='road'" + (mode === 'road' ? ' selected' : '') + ">🚗 Road</option>" +
+        "<option value='hike'" + (mode === 'hike' ? ' selected' : '') + ">🥾 Hiking Path</option>" +
+        '</select>';
     }
+
+    const linkItems = Array.isArray(wp.linkItems) ? wp.linkItems : [];
+    const linksHtml = linkItems.map((item, linkIndex) =>
+      "<div class='link-item-card'>" +
+      "<label>Link + Info:</label>" +
+      "<div class='array-row array-row-double'>" +
+      "<input value='" + safeText(item.url) + "' placeholder='Link URL' onchange='editLinkUrl(" + index + ", " + linkIndex + ", this.value)'/>" +
+      "<input value='" + safeText(item.info) + "' placeholder='Link info' onchange='editLinkInfo(" + index + ", " + linkIndex + ", this.value)'/>" +
+      "<button type='button' class='tiny-btn' onclick='removeLink(" + index + ", " + linkIndex + "); event.stopPropagation();'>✕</button>" +
+      "</div>" +
+      '</div>'
+    ).join('');
+
+    const rawImageItems = Array.isArray(wp.images)
+      ? wp.images.map((image) => String(image || ''))
+      : [];
+    const imageItems = rawImageItems.map((image) => image.trim()).filter(Boolean);
+
+    const imageStripHtml = imageItems.length
+      ? "<div class='wp-image-scroll'>" +
+        imageItems.map((image) => "<img src='" + safeText(image) + "' alt='Waypoint image preview' class='wp-image-slide' />").join('') +
+        '</div>'
+      : "<div class='wp-image-empty'>No images yet</div>";
+
+    const isEditingImages = imageEditorWaypointSet.has(index);
+    const imageEditorRows = rawImageItems.map((image, imageIndex) =>
+      "<div class='array-row array-row-image-edit'>" +
+      (image.trim()
+        ? "<img class='link-thumb' src='" + safeText(image) + "' alt='Waypoint image preview' />"
+        : "<div class='link-thumb link-thumb-empty'>No image</div>") +
+      "<input value='" + safeText(image) + "' placeholder='Image URL' onchange='editImageUrl(" + index + ", " + imageIndex + ", this.value)'/>" +
+      "<button type='button' class='tiny-btn' onclick='removeImageLink(" + index + ", " + imageIndex + "); event.stopPropagation();'>✕</button>" +
+      '</div>'
+    ).join('');
+
+    const imageManagerHtml = isEditingImages
+      ? "<div class='image-manager-panel'>" +
+        "<div class='array-list'>" + imageEditorRows + '</div>' +
+        "<button type='button' class='tiny-add-btn' onclick='addImageLink(" + index + "); event.stopPropagation();'>+ Add Image Link</button>" +
+        '</div>'
+      : '';
+
+    const notesHtml = (wp.notes || []).map((note, noteIndex) =>
+      "<div class='array-row'>" +
+      "<textarea rows='2' onchange='editNote(" + index + ", " + noteIndex + ", this.value)'>" + safeText(note) + '</textarea>' +
+      "<button type='button' class='tiny-btn' onclick='removeNote(" + index + ", " + noteIndex + "); event.stopPropagation();'>✕</button>" +
+      '</div>'
+    ).join('');
 
     wrapper.innerHTML =
       "<div class='wp-header' onclick='toggleWaypoint(" + index + ")'>" +
-        "<span>" + wp.name + "</span>" +
-        segmentControl +
-      "</div>" +
-
+      "<span class='drag-handle' title='Drag to reorder'>⋮⋮</span>" +
+      '<span>' + safeText(wp.name) + '</span>' +
+      segmentControl +
+      '</div>' +
       "<div class='wp-content'>" +
-        "<label>Name:</label>" +
-        "<input value='" + wp.name + "' onchange='editName(" + index + ", this.value)' /><br>" +
-
-        "<label>URL:</label>" +
-        "<input value='" + wp.url + "' onchange='editUrl(" + index + ", this.value)' /><br>" +
-
-        "<label>Notes:</label>" +
-        "<textarea rows='2' onchange='editNotes(" + index + ", this.value)'>" +
-        wp.notes +
-        "</textarea>" +
-      "</div>";
+      '<label>Name:</label>' +
+      "<input value='" + safeText(wp.name) + "' onchange='editName(" + index + ", this.value)' /><br>" +
+      "<div class='image-section-header'>" +
+      '<label>Images:</label>' +
+      "<button type='button' class='tiny-icon-btn" + (isEditingImages ? ' active' : '') + "' onclick='toggleImageEditor(" + index + "); event.stopPropagation();'>✎</button>" +
+      '</div>' +
+      imageStripHtml +
+      imageManagerHtml +
+      '<label>Links (URL + Info):</label>' +
+      "<div class='array-list'>" + linksHtml + '</div>' +
+      "<button type='button' class='tiny-add-btn' onclick='addLink(" + index + "); event.stopPropagation();'>+ Add Link</button>" +
+      '<label>Additional Notes:</label>' +
+      "<div class='array-list'>" + notesHtml + '</div>' +
+      "<button type='button' class='tiny-add-btn' onclick='addNote(" + index + "); event.stopPropagation();'>+ Add Note</button>" +
+      "<button type='button' class='danger-btn' onclick='removeWaypoint(" + index + "); event.stopPropagation();'>Delete Waypoint</button>" +
+      '</div>';
 
     container.appendChild(wrapper);
   });
 }
 
+function setSegmentMode(index, value) {
+  segmentModes[index] = value;
+  updateRouting();
+}
+
+function reindexExpandedSet(removedIndex) {
+  const updated = new Set();
+  expandedWaypointSet.forEach((idx) => {
+    if (idx < removedIndex) updated.add(idx);
+    if (idx > removedIndex) updated.add(idx - 1);
+  });
+  expandedWaypointSet = updated;
+
+  const imageUpdated = new Set();
+  imageEditorWaypointSet.forEach((idx) => {
+    if (idx < removedIndex) imageUpdated.add(idx);
+    if (idx > removedIndex) imageUpdated.add(idx - 1);
+  });
+  imageEditorWaypointSet = imageUpdated;
+}
+
+function removeWaypoint(index) {
+  if (!confirm('Delete this waypoint?')) return;
+  if (waypoints.length <= 1) {
+    waypoints = [];
+    segmentModes = [];
+    waypointCounter = 1;
+    renderSidebar();
+    updateRouting();
+    return;
+  }
+
+  waypoints.splice(index, 1);
+
+  if (segmentModes.length > 0) {
+    if (index === 0) segmentModes.splice(0, 1);
+    else if (index >= waypoints.length) segmentModes.splice(segmentModes.length - 1, 1);
+    else segmentModes.splice(index, 1);
+  }
+
+  reindexExpandedSet(index);
+  waypointCounter = waypoints.length + 1;
+  renderSidebar();
+  updateRouting();
+}
+
+function undoLastWaypoint() {
+  if (!waypoints.length) {
+    setMessage('Nothing to undo.');
+    return;
+  }
+
+  waypoints.pop();
+  if (segmentModes.length) segmentModes.pop();
+  waypointCounter = waypoints.length + 1;
+  expandedWaypointSet.clear();
+  imageEditorWaypointSet.clear();
+  renderSidebar();
+  updateRouting();
+  setMessage('Removed last waypoint.');
+}
+
+function downloadTextFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function xmlEscape(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function exportGpx() {
+  if (waypoints.length < 2) {
+    setMessage('Need at least 2 waypoints to export GPX.');
+    return;
+  }
+
+  const routeName = currentRouteName() || 'Admaply Route';
+  const routePoints = waypoints.map((wp) => `    <rtept lat="${wp.latlng.lat}" lon="${wp.latlng.lng}"><name>${xmlEscape(wp.name)}</name></rtept>`).join('\n');
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Admaply" xmlns="http://www.topografix.com/GPX/1/1">\n  <rte>\n    <name>${xmlEscape(routeName)}</name>\n${routePoints}\n  </rte>\n</gpx>\n`;
+
+  const filename = `${routeName.replace(/[^a-z0-9-_]+/gi, '_').toLowerCase() || 'route'}.gpx`;
+  downloadTextFile(filename, gpx, 'application/gpx+xml');
+  setMessage('GPX exported.');
+}
+
+function parseGpxText(text) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('Invalid GPX file.');
+
+  const routeNameNode = doc.querySelector('rte > name, trk > name');
+  const routeName = routeNameNode ? routeNameNode.textContent.trim() : '';
+  const pts = Array.from(doc.querySelectorAll('rtept, trkpt'));
+  const parsed = pts.map((pt, idx) => {
+    const lat = Number(pt.getAttribute('lat'));
+    const lng = Number(pt.getAttribute('lon'));
+    const nameNode = pt.querySelector('name');
+    return {
+      latlng: L.latLng(lat, lng),
+      name: (nameNode && nameNode.textContent.trim()) || `Waypoint ${idx + 1}`,
+      linkItems: [],
+      images: [],
+      notes: []
+    };
+  }).filter((wp) => Number.isFinite(wp.latlng.lat) && Number.isFinite(wp.latlng.lng));
+
+  if (parsed.length < 2) throw new Error('GPX must contain at least 2 route points.');
+  return { routeName, points: parsed };
+}
+
+async function importGpxFile(file) {
+  const text = await file.text();
+  const parsed = parseGpxText(text);
+  waypoints = parsed.points;
+  segmentModes = Array.from({ length: Math.max(waypoints.length - 1, 0) }, () => 'road');
+  waypointCounter = waypoints.length + 1;
+  expandedWaypointSet.clear();
+  imageEditorWaypointSet.clear();
+  if (parsed.routeName) document.getElementById('routeNameInput').value = parsed.routeName;
+  renderSidebar();
+  updateRouting();
+  setMessage(`Imported GPX with ${waypoints.length} points.`);
+}
+
 function toggleWaypoint(index) {
-  const cards = document.querySelectorAll('.wp-item');
-  cards[index].classList.toggle('expanded');
+  const card = document.querySelectorAll('.wp-item')[index];
+  card.classList.toggle('expanded');
+  if (card.classList.contains('expanded')) expandedWaypointSet.add(index);
+  else expandedWaypointSet.delete(index);
 }
 
 function editName(index, value) {
+  expandedWaypointSet.add(index);
   waypoints[index].name = value;
   renderSidebar();
 }
 
-function editUrl(index, value) {
-  waypoints[index].url = value;
+function addLink(index) {
+  expandedWaypointSet.add(index);
+  waypoints[index].linkItems = waypoints[index].linkItems || [];
+  waypoints[index].linkItems.push({ url: '', info: '' });
+  renderSidebar();
 }
 
-function editNotes(index, value) {
-  waypoints[index].notes = value;
+function toggleImageEditor(index) {
+  expandedWaypointSet.add(index);
+  if (imageEditorWaypointSet.has(index)) imageEditorWaypointSet.delete(index);
+  else imageEditorWaypointSet.add(index);
+  renderSidebar();
 }
 
+function addImageLink(index) {
+  expandedWaypointSet.add(index);
+  imageEditorWaypointSet.add(index);
+  waypoints[index].images = waypoints[index].images || [];
+  waypoints[index].images.push('');
+  renderSidebar();
+}
 
-/* ================= DIRECTIONS ================= */
+function editImageUrl(index, imageIndex, value) {
+  waypoints[index].images[imageIndex] = value;
+  expandedWaypointSet.add(index);
+  imageEditorWaypointSet.add(index);
+  renderSidebar();
+}
+
+function removeImageLink(index, imageIndex) {
+  expandedWaypointSet.add(index);
+  imageEditorWaypointSet.add(index);
+  waypoints[index].images.splice(imageIndex, 1);
+  renderSidebar();
+}
+
+function editLinkUrl(index, linkIndex, value) {
+  waypoints[index].linkItems[linkIndex].url = value;
+}
+
+function editLinkInfo(index, linkIndex, value) {
+  waypoints[index].linkItems[linkIndex].info = value;
+}
+
+function removeLink(index, linkIndex) {
+  expandedWaypointSet.add(index);
+  waypoints[index].linkItems.splice(linkIndex, 1);
+  renderSidebar();
+}
+
+function addNote(index) {
+  expandedWaypointSet.add(index);
+  waypoints[index].notes = waypoints[index].notes || [];
+  waypoints[index].notes.push('');
+  renderSidebar();
+}
+
+function editNote(index, noteIndex, value) {
+  waypoints[index].notes[noteIndex] = value;
+}
+
+function removeNote(index, noteIndex) {
+  expandedWaypointSet.add(index);
+  waypoints[index].notes.splice(noteIndex, 1);
+  renderSidebar();
+}
 
 function renderDirections(instructions) {
-
-  const container = document.getElementById("directionsList");
-  container.innerHTML = "";
-
-  instructions.forEach(step => {
-
-    const div = document.createElement("div");
-    div.className = "direction-step";
-
-    div.innerHTML =
-      "<div>" + step.text + "</div>" +
-      "<small>" + (step.distance / 1000).toFixed(2) + " km</small>";
-
+  const container = document.getElementById('directionsList');
+  container.innerHTML = '';
+  instructions.forEach((step) => {
+    const div = document.createElement('div');
+    div.className = 'direction-step';
+    div.innerHTML = '<div>' + safeText(step.text) + '</div><small>' + (step.distance / 1000).toFixed(2) + ' km</small>';
     container.appendChild(div);
   });
 }
 
 function toggleDirections() {
-  const panel = document.getElementById("floatingDirections");
-  const arrow = document.getElementById("dirArrow");
-
-  panel.classList.toggle("collapsed");
-  arrow.textContent =
-    panel.classList.contains("collapsed") ? "▲" : "▼";
+  const panel = document.getElementById('floatingDirections');
+  const arrow = document.getElementById('dirArrow');
+  panel.classList.toggle('collapsed');
+  arrow.textContent = panel.classList.contains('collapsed') ? '▲' : '▼';
 }
 
+function serializeWaypoints() {
+  return waypoints.map((wp) => ({
+    lat: wp.latlng.lat,
+    lng: wp.latlng.lng,
+    name: wp.name,
+    linkItems: (wp.linkItems || []).map((item) => ({
+      url: String(item.url || '').trim(),
+      info: String(item.info || '').trim()
+    })).filter((item) => item.url || item.info),
+    images: (wp.images || []).map((image) => String(image || '').trim()).filter(Boolean),
+    links: (wp.linkItems || []).map((item) => String(item.url || '').trim()).filter(Boolean),
+    notes: (wp.notes || []).map((v) => String(v || '').trim()).filter(Boolean)
+  }));
+}
+
+function loadWaypoints(saved, savedSegmentModes) {
+  waypoints = (saved || []).map((wp, index) => ({
+    latlng: L.latLng(wp.lat, wp.lng),
+    name: wp.name || `Waypoint ${index + 1}`,
+    linkItems: Array.isArray(wp.linkItems)
+      ? wp.linkItems.map((item) => ({ url: item.url || '', info: item.info || '' }))
+      : (Array.isArray(wp.links) ? wp.links.map((url) => ({ url, info: '' })) : []),
+    images: Array.isArray(wp.images)
+      ? wp.images.map((image) => String(image || '').trim()).filter(Boolean)
+      : (Array.isArray(wp.linkItems)
+        ? wp.linkItems.map((item) => String((item && item.image) || '').trim()).filter(Boolean)
+        : []),
+    notes: Array.isArray(wp.notes) ? wp.notes : (wp.notes ? [wp.notes] : [])
+  }));
+
+  const needed = Math.max(waypoints.length - 1, 0);
+  const cleanModes = Array.isArray(savedSegmentModes) ? savedSegmentModes : [];
+  segmentModes = Array.from({ length: needed }, (_, idx) => (cleanModes[idx] === 'hike' ? 'hike' : 'road'));
+
+  waypointCounter = waypoints.length + 1;
+  renderSidebar();
+  updateRouting();
+}
+
+async function saveRoute() {
+  if (waypoints.length < 2) {
+    setMessage('Add at least 2 waypoints to save.');
+    return;
+  }
+  const routeName = currentRouteName();
+  if (!routeName) {
+    setMessage('Please enter a route name.');
+    return;
+  }
+
+  const res = await fetch('/api/routes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ waypoints: serializeWaypoints(), segmentModes, name: routeName })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    setMessage(data.error || 'Unable to save route.');
+    return;
+  }
+
+  document.getElementById('routeNameInput').value = data.route.name;
+  setMessage(`Saved: ${data.route.name}`);
+}
+
+async function loadLatestRoute() {
+  const res = await fetch('/api/routes/latest');
+  const data = await res.json();
+  if (!res.ok) {
+    setMessage(data.error || 'Unable to load route.');
+    return;
+  }
+  if (!data.route) {
+    setMessage('No saved route found yet.');
+    return;
+  }
+
+  document.getElementById('routeNameInput').value = data.route.name || '';
+  loadWaypoints(data.route.waypoints, data.route.segmentModes);
+  setMessage(`Loaded: ${data.route.name}`);
+}
+
+async function loadRouteFromQuery() {
+  const routeId = new URLSearchParams(window.location.search).get('routeId');
+  if (!routeId) return;
+
+  const res = await fetch(`/api/routes/${routeId}`);
+  const data = await res.json();
+  if (!res.ok) {
+    setMessage(data.error || 'Unable to load selected route.');
+    return;
+  }
+
+  document.getElementById('routeNameInput').value = data.route.name || '';
+  loadWaypoints(data.route.waypoints, data.route.segmentModes);
+  setMessage(`Loaded: ${data.route.name}`);
+}
+
+removeLegacyPlannerDuplicates();
+document.getElementById('gpxImportInput').addEventListener('change', async (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  try {
+    await importGpxFile(file);
+  } catch (error) {
+    setMessage(error.message || 'Failed to import GPX.');
+  } finally {
+    event.target.value = '';
+  }
+});
+
+(async function init() {
+  const ok = await checkSession();
+  if (!ok) return;
+  sidebarExpanded = false;
+  handlePlannerLayoutMode();
+  window.addEventListener('resize', handlePlannerLayoutMode);
+  await loadRouteFromQuery();
+})();
 </script>
 
 </body>

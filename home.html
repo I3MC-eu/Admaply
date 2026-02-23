@@ -8,20 +8,290 @@
 </head>
 <body>
 
-<div class="fullscreen-center">
-  <div class="center-card">
-    <h2>Welcome Back</h2>
-    <p>Your route planning hub</p>
+<div class="home-shell">
+  <div class="home-header-card">
+    <div>
+      <h2>Welcome Back</h2>
+      <p id="welcomeText">Your route planning hub</p>
+    </div>
 
-    <button onclick="window.location.href='planner.html'">
-      Open Planner
-    </button>
+    <div class="home-actions profile-anchor">
+      <button onclick="window.location.href='planner.html'">Create New Route</button>
+      <button class="secondary-btn" id="profileBtn" type="button">
+        <span id="profileAvatar" class="profile-avatar">P</span>
+        <span>Profile</span>
+      </button>
+    </div>
+  </div>
 
-    <br><br>
-
-    <a href="index.html">Logout</a>
+  <div class="home-routes-card">
+    <h3>Saved Routes</h3>
+    <p class="muted">Pick one to reopen it in the planner.</p>
+    <div id="routeList" class="saved-route-list"></div>
   </div>
 </div>
+
+<div id="profileMenu" class="profile-menu hidden" role="dialog" aria-label="Profile menu">
+  <h4>Profile</h4>
+  <p id="profileEmail" class="muted"></p>
+
+  <label for="currentPasswordInput">Current password</label>
+  <input id="currentPasswordInput" type="password" placeholder="Current password">
+  <label for="newPasswordInput">New password</label>
+  <input id="newPasswordInput" type="password" placeholder="New password (8+ chars)">
+  <button class="secondary-btn" id="changePasswordBtn">Change Password</button>
+
+  <button class="secondary-btn" onclick="window.location.href='privacy.html'">Privacy & Terms</button>
+  <button class="danger-btn" id="deleteAccountBtn">Delete Account</button>
+  <button class="secondary-btn" id="logoutBtn">Logout</button>
+  <p id="profileMessage" class="status-message"></p>
+</div>
+
+<script>
+
+let currentSessionUser = null;
+
+function removeLegacyHomeDuplicates() {
+  const shells = document.querySelectorAll('.home-shell');
+  shells.forEach((node, index) => {
+    if (index > 0) node.remove();
+  });
+
+  document.querySelectorAll('.fullscreen-center').forEach((node) => node.remove());
+}
+
+function formatDate(value) {
+  return new Date(value).toLocaleString();
+}
+
+function safeText(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildRouteImages(waypoints) {
+  const images = (waypoints || [])
+    .flatMap((wp) => {
+      const directImages = Array.isArray(wp.images) ? wp.images : [];
+      if (directImages.length) return directImages;
+      return Array.isArray(wp.linkItems) ? wp.linkItems.map((item) => item && item.image) : [];
+    })
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+
+  if (!images.length) {
+    return '<div class="route-image-strip-empty">No images</div>';
+  }
+
+  return '<div class="route-image-strip">' +
+    images.map((src) => `<img src="${src}" alt="Route link image" class="route-image-thumb" />`).join('') +
+    '</div>';
+}
+
+function buildRouteMiniMap(waypoints) {
+  if (!Array.isArray(waypoints) || waypoints.length < 2) {
+    return '<div class="mini-map-empty">No preview</div>';
+  }
+
+  const width = 220;
+  const height = 120;
+  const pad = 14;
+
+  const lats = waypoints.map((wp) => wp.lat);
+  const lngs = waypoints.map((wp) => wp.lng);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+
+  const latSpan = Math.max(maxLat - minLat, 0.0001);
+  const lngSpan = Math.max(maxLng - minLng, 0.0001);
+
+  const points = waypoints.map((wp) => {
+    const x = pad + ((wp.lng - minLng) / lngSpan) * (width - pad * 2);
+    const y = height - pad - ((wp.lat - minLat) / latSpan) * (height - pad * 2);
+    return { x, y };
+  });
+
+  const polyline = points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const dots = points.map((p, index) => {
+    const color = index === 0 ? '#2ecc71' : (index === points.length - 1 ? '#e67e22' : '#9aa6b2');
+    return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3" fill="${color}" />`;
+  }).join('');
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="mini-map" role="img" aria-label="Route preview map">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="#11161b"></rect>
+      <polyline points="${polyline}" fill="none" stroke="#2ecc71" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      ${dots}
+    </svg>
+  `;
+}
+
+function renderRoutes(routes) {
+  const container = document.getElementById('routeList');
+
+  if (!routes.length) {
+    container.innerHTML = '<p class="muted">No routes saved yet. Create one in the planner.</p>';
+    return;
+  }
+
+  container.innerHTML = routes.map((route) => `
+    <div class="saved-route-card">
+      <div>
+        <h4>${safeText(route.name)}</h4>
+        <p>${route.waypointCount} waypoints • ${formatDate(route.createdAt)}</p>
+        <div class="route-card-actions">
+          <button class="secondary-btn" onclick="openRoute(${route.id})">Open Route</button>
+          <button class="secondary-btn" onclick="shareRoute(${route.id})">Share</button>
+          <button class="danger-btn" onclick="deleteRoute(${route.id}, '${String(route.name || '').replace(/'/g, "&#39;")}')">Delete</button>
+        </div>
+      </div>
+      ${buildRouteMiniMap(route.waypoints)}${buildRouteImages(route.waypoints)}
+    </div>
+  `).join('');
+}
+
+function updateProfileUI(user) {
+  currentSessionUser = user;
+  const identity = user.email || user.username || 'user';
+  document.getElementById('welcomeText').textContent = `Signed in as ${identity}`;
+  document.getElementById('profileEmail').textContent = identity;
+  document.getElementById('profileAvatar').textContent = identity.slice(0, 1).toUpperCase();
+
+  const isDemo = String(user.email || '').toLowerCase() === 'demo@admaply.local';
+  document.getElementById('changePasswordBtn').disabled = isDemo;
+  if (isDemo) {
+    document.getElementById('profileMessage').textContent = 'Demo account password cannot be changed.';
+  }
+}
+
+function toggleProfileMenu(forceState) {
+  const menu = document.getElementById('profileMenu');
+  const shouldOpen = typeof forceState === 'boolean' ? forceState : menu.classList.contains('hidden');
+  menu.classList.toggle('hidden', !shouldOpen);
+}
+
+function openRoute(routeId) {
+  window.location.href = `planner.html?routeId=${routeId}`;
+}
+
+async function loadSessionAndRoutes() {
+  const sessionRes = await fetch('/api/session');
+  const sessionData = await sessionRes.json();
+
+  if (!sessionData.loggedIn) {
+    window.location.href = 'index.html';
+    return;
+  }
+
+  updateProfileUI(sessionData.user);
+
+  const routeRes = await fetch('/api/routes');
+  const routeData = await routeRes.json();
+
+  if (!routeRes.ok) {
+    document.getElementById('routeList').innerHTML =
+      `<p class="muted">${routeData.error || 'Failed to load saved routes.'}</p>`;
+    return;
+  }
+
+  renderRoutes(routeData.routes || []);
+}
+
+async function logout() {
+  await fetch('/api/logout', { method: 'POST' });
+  window.location.href = 'index.html';
+}
+
+async function shareRoute(routeId) {
+  const res = await fetch(`/api/routes/${routeId}/share`, { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || 'Unable to create share link.');
+    return;
+  }
+
+  const url = data.shareUrl;
+  try {
+    await navigator.clipboard.writeText(url);
+    alert('Share link copied to clipboard:\n' + url);
+  } catch {
+    prompt('Copy this share link:', url);
+  }
+}
+
+async function deleteRoute(routeId, routeName) {
+  if (!confirm(`Delete route "${routeName}"? This cannot be undone.`)) return;
+  const res = await fetch(`/api/routes/${routeId}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.error || 'Failed to delete route.');
+    return;
+  }
+  await loadSessionAndRoutes();
+}
+
+async function changePassword() {
+  const currentPassword = document.getElementById('currentPasswordInput').value;
+  const newPassword = document.getElementById('newPasswordInput').value;
+  const message = document.getElementById('profileMessage');
+  message.textContent = '';
+
+  if (!currentPassword || !newPassword) {
+    message.textContent = 'Enter current and new password.';
+    return;
+  }
+
+  const res = await fetch('/api/account/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword, newPassword })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    message.textContent = data.error || 'Failed to change password.';
+    return;
+  }
+
+  document.getElementById('currentPasswordInput').value = '';
+  document.getElementById('newPasswordInput').value = '';
+  message.textContent = 'Password updated.';
+}
+
+async function deleteAccount() {
+  if (!confirm('Delete your account and all routes permanently? This cannot be undone.')) return;
+  const res = await fetch('/api/account', { method: 'DELETE' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Unable to delete account.');
+    return;
+  }
+  alert('Account deleted.');
+  window.location.href = 'index.html';
+}
+
+removeLegacyHomeDuplicates();
+document.getElementById('logoutBtn').addEventListener('click', logout);
+document.getElementById('deleteAccountBtn').addEventListener('click', deleteAccount);
+document.getElementById('changePasswordBtn').addEventListener('click', changePassword);
+document.getElementById('profileBtn').addEventListener('click', () => toggleProfileMenu());
+document.addEventListener('click', (event) => {
+  const menu = document.getElementById('profileMenu');
+  const btn = document.getElementById('profileBtn');
+  if (menu.classList.contains('hidden')) return;
+  if (!menu.contains(event.target) && !btn.contains(event.target)) {
+    toggleProfileMenu(false);
+  }
+});
+loadSessionAndRoutes();
+</script>
 
 </body>
 </html>
