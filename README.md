@@ -10,10 +10,10 @@ https://admaply.i3mc.fun/
   Password: demo123
 
 ---
-This is a work in Progress! Please Report any issues to me (i3mc@i3mc.eu).
-Current issues:
--Hike routing
--Persistent Memmory
+This is a work in Progress! Please Report any issues to me (i3mc@i3mc.eu). </br>
+Current issues: </br>
+-Hike routing </br>
+-Persistent Memmory </br>
 ---
 ## 🚀 Features
 
