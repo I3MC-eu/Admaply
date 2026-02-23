@@ -16,9 +16,15 @@
   <div id="sidebar" class="collapsed">
     <button id="sidebarToggle" class="sidebar-toggle" type="button" onclick="toggleSidebar()">▲ Planner Panel</button>
     <h3>Route Info</h3>
-    <div id="routeInfo" class="route-info">Total Distance: –</div>
+    <div id="routeInfo" class="route-info">Add waypoints to calculate distance.</div>
 
     <div class="planner-actions">
+      <label for="pathModeSelect">Path Mode</label>
+      <select id="pathModeSelect" onchange="setPathMode(this.value)">
+        <option value="snap_paths">Snap to paths (incl. alpine-friendly)</option>
+        <option value="free_draw">Free draw</option>
+        <option value="straight_lines">Straight lines</option>
+      </select>
       <label for="routeNameInput">Route Name</label>
       <input id="routeNameInput" type="text" placeholder="e.g. Sunday Mountain Loop">
       <button class="secondary-btn" onclick="saveRoute()">Save Route</button>
@@ -28,6 +34,7 @@
       <label class="file-upload-btn secondary-btn" for="gpxImportInput">Import GPX</label>
       <input id="gpxImportInput" type="file" accept=".gpx,application/gpx+xml,text/xml,application/xml" style="display:none">
       <p id="plannerMessage" class="status-message"></p>
+      <p id="autosaveStatus" class="status-message">No changes yet.</p>
     </div>
 
     <h3>Waypoints</h3>
@@ -61,6 +68,9 @@ var expandedWaypointSet = new Set();
 var imageEditorWaypointSet = new Set();
 var draggedIndex = null;
 var sidebarExpanded = false;
+var pathMode = 'snap_paths';
+var hasUnsavedChanges = false;
+var lastSavedAt = null;
 
 function toggleSidebar(forceExpand) {
   const sidebar = document.getElementById('sidebar');
@@ -114,6 +124,30 @@ function setMessage(text) {
   document.getElementById('plannerMessage').textContent = text;
 }
 
+function updateAutosaveStatus() {
+  const node = document.getElementById('autosaveStatus');
+  if (hasUnsavedChanges) {
+    node.textContent = 'Unsaved changes…';
+    return;
+  }
+  if (!lastSavedAt) {
+    node.textContent = 'No changes yet.';
+    return;
+  }
+  node.textContent = `Saved ${new Date(lastSavedAt).toLocaleTimeString()}`;
+}
+
+function markDirty() {
+  hasUnsavedChanges = true;
+  updateAutosaveStatus();
+}
+
+function markSaved() {
+  hasUnsavedChanges = false;
+  lastSavedAt = Date.now();
+  updateAutosaveStatus();
+}
+
 function currentRouteName() {
   return document.getElementById('routeNameInput').value.trim();
 }
@@ -147,24 +181,66 @@ map.on('click', function(e) {
   });
   waypointCounter++;
   if (waypoints.length >= 2) segmentModes.push('road');
+  markDirty();
   renderSidebar();
   updateRouting();
 });
 
-function createRouteControl(wp1, wp2, mode) {
-  const config = mode === 'hike'
-    ? { serviceUrl: 'https://routing.openstreetmap.de/routed-foot/route/v1', color: '#2ecc71' }
-    : { serviceUrl: 'https://router.project-osrm.org/route/v1', color: '#e74c3c' };
+function getRouteConfig(mode) {
+  return mode === 'hike'
+    ? {
+      serviceUrls: [
+        'https://routing.openstreetmap.de/routed-hiking/route/v1',
+        'https://routing.openstreetmap.de/routed-foot/route/v1',
+        'https://router.project-osrm.org/route/v1'
+      ],
+      color: '#2ecc71'
+    }
+    : { serviceUrls: ['https://router.project-osrm.org/route/v1'], color: '#e74c3c' };
+}
+
+function createRouteControl(wp1, wp2, config, serviceUrl) {
 
   return L.Routing.control({
     waypoints: [wp1.latlng, wp2.latlng],
-    router: L.Routing.osrmv1({ serviceUrl: config.serviceUrl }),
+    router: L.Routing.osrmv1({ serviceUrl }),
     addWaypoints: false,
     draggableWaypoints: false,
     show: false,
     createMarker: function() { return null; },
     lineOptions: { styles: [{ color: config.color, weight: 4 }] }
   }).addTo(map);
+}
+
+function setPathMode(mode) {
+  pathMode = mode;
+  markDirty();
+  const modeLabel = mode === 'snap_paths'
+    ? 'Snap to paths'
+    : (mode === 'free_draw' ? 'Free draw' : 'Straight lines');
+  setMessage(`Path mode: ${modeLabel}`);
+  updateRouting();
+}
+
+function drawDirectSegments(label) {
+  let totalDistance = 0;
+  const steps = [];
+
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const wp1 = waypoints[i];
+    const wp2 = waypoints[i + 1];
+    const dist = wp1.latlng.distanceTo(wp2.latlng);
+    totalDistance += dist;
+
+    const style = label === 'Free draw'
+      ? { color: '#4aa3ff', weight: 4 }
+      : { color: '#f39c12', weight: 4, dashArray: '6,6' };
+    segmentLayers.push(L.polyline([wp1.latlng, wp2.latlng], style).addTo(map));
+    steps.push({ text: `${label} segment`, distance: dist });
+  }
+
+  updateRouteInfo(totalDistance);
+  renderDirections(steps);
 }
 
 function updateRouting() {
@@ -179,8 +255,18 @@ function updateRouting() {
   let pending = 0;
 
   if (waypoints.length < 2) {
-    document.getElementById('routeInfo').innerHTML = 'Total Distance: –';
+    document.getElementById('routeInfo').innerHTML = 'Add waypoints to calculate distance.';
     document.getElementById('directionsList').innerHTML = 'No route yet.';
+    return;
+  }
+
+  if (pathMode === 'free_draw') {
+    drawDirectSegments('Free draw');
+    return;
+  }
+
+  if (pathMode === 'straight_lines') {
+    drawDirectSegments('Straight line');
     return;
   }
 
@@ -188,39 +274,57 @@ function updateRouting() {
     const wp1 = waypoints[i];
     const wp2 = waypoints[i + 1];
     const mode = segmentModes[i] || 'road';
+    const config = getRouteConfig(mode);
 
     pending++;
-    const control = createRouteControl(wp1, wp2, mode);
-    segmentLayers.push(control);
 
-    control.on('routesfound', function(e) {
-      const route = e.routes[0];
-      totalDistance += route.summary.totalDistance;
-      allInstructions = allInstructions.concat(route.instructions);
+    function finalizeSegment() {
       pending--;
       if (pending === 0) {
         updateRouteInfo(totalDistance);
         renderDirections(allInstructions);
       }
-    });
+    }
 
-    control.on('routingerror', function() {
-      const fallback = L.polyline([wp1.latlng, wp2.latlng], { color: '#f39c12', weight: 4, dashArray: '6,6' }).addTo(map);
-      segmentLayers.push(fallback);
-      const dist = wp1.latlng.distanceTo(wp2.latlng);
-      totalDistance += dist;
-      allInstructions.push({ text: `Fallback direct segment (${mode})`, distance: dist });
-      pending--;
-      if (pending === 0) {
-        updateRouteInfo(totalDistance);
-        renderDirections(allInstructions);
-      }
-    });
+    function attemptRoute(serviceIndex) {
+      const control = createRouteControl(wp1, wp2, config, config.serviceUrls[serviceIndex]);
+      segmentLayers.push(control);
+
+      control.on('routesfound', function(e) {
+        const route = e.routes[0];
+        totalDistance += route.summary.totalDistance;
+        allInstructions = allInstructions.concat(route.instructions);
+        finalizeSegment();
+      });
+
+      control.on('routingerror', function() {
+        control.remove();
+        if (serviceIndex + 1 < config.serviceUrls.length) {
+          attemptRoute(serviceIndex + 1);
+          return;
+        }
+
+        const fallback = L.polyline([wp1.latlng, wp2.latlng], { color: '#f39c12', weight: 4, dashArray: '6,6' }).addTo(map);
+        segmentLayers.push(fallback);
+        const dist = wp1.latlng.distanceTo(wp2.latlng);
+        totalDistance += dist;
+        allInstructions.push({ text: 'Routing unavailable for selected mode.', distance: dist });
+        finalizeSegment();
+      });
+    }
+
+    attemptRoute(0);
   }
 }
 
 function updateRouteInfo(distanceMeters) {
   document.getElementById('routeInfo').innerHTML = 'Total Distance: ' + (distanceMeters / 1000).toFixed(2) + ' km';
+}
+
+function focusWaypoint(index) {
+  const wp = waypoints[index];
+  if (!wp) return;
+  map.flyTo(wp.latlng, Math.max(map.getZoom(), 14), { duration: 0.5 });
 }
 
 function onDragStart(index, event) {
@@ -257,6 +361,7 @@ function onDrop(index, event) {
   segmentModes = Array.from({ length: Math.max(waypoints.length - 1, 0) }, () => 'road');
   expandedWaypointSet = new Set([index]);
   draggedIndex = null;
+  markDirty();
 
   setMessage('Waypoints reordered. Segment transport modes reset to Road.');
   renderSidebar();
@@ -367,6 +472,7 @@ function renderSidebar() {
 
 function setSegmentMode(index, value) {
   segmentModes[index] = value;
+  markDirty();
   updateRouting();
 }
 
@@ -392,6 +498,7 @@ function removeWaypoint(index) {
     waypoints = [];
     segmentModes = [];
     waypointCounter = 1;
+    markDirty();
     renderSidebar();
     updateRouting();
     return;
@@ -407,6 +514,7 @@ function removeWaypoint(index) {
 
   reindexExpandedSet(index);
   waypointCounter = waypoints.length + 1;
+  markDirty();
   renderSidebar();
   updateRouting();
 }
@@ -422,6 +530,7 @@ function undoLastWaypoint() {
   waypointCounter = waypoints.length + 1;
   expandedWaypointSet.clear();
   imageEditorWaypointSet.clear();
+  markDirty();
   renderSidebar();
   updateRouting();
   setMessage('Removed last waypoint.');
@@ -497,6 +606,7 @@ async function importGpxFile(file) {
   expandedWaypointSet.clear();
   imageEditorWaypointSet.clear();
   if (parsed.routeName) document.getElementById('routeNameInput').value = parsed.routeName;
+  markDirty();
   renderSidebar();
   updateRouting();
   setMessage(`Imported GPX with ${waypoints.length} points.`);
@@ -512,6 +622,7 @@ function toggleWaypoint(index) {
 function editName(index, value) {
   expandedWaypointSet.add(index);
   waypoints[index].name = value;
+  markDirty();
   renderSidebar();
 }
 
@@ -519,6 +630,7 @@ function addLink(index) {
   expandedWaypointSet.add(index);
   waypoints[index].linkItems = waypoints[index].linkItems || [];
   waypoints[index].linkItems.push({ url: '', info: '' });
+  markDirty();
   renderSidebar();
 }
 
@@ -534,6 +646,7 @@ function addImageLink(index) {
   imageEditorWaypointSet.add(index);
   waypoints[index].images = waypoints[index].images || [];
   waypoints[index].images.push('');
+  markDirty();
   renderSidebar();
 }
 
@@ -548,20 +661,24 @@ function removeImageLink(index, imageIndex) {
   expandedWaypointSet.add(index);
   imageEditorWaypointSet.add(index);
   waypoints[index].images.splice(imageIndex, 1);
+  markDirty();
   renderSidebar();
 }
 
 function editLinkUrl(index, linkIndex, value) {
   waypoints[index].linkItems[linkIndex].url = value;
+  markDirty();
 }
 
 function editLinkInfo(index, linkIndex, value) {
   waypoints[index].linkItems[linkIndex].info = value;
+  markDirty();
 }
 
 function removeLink(index, linkIndex) {
   expandedWaypointSet.add(index);
   waypoints[index].linkItems.splice(linkIndex, 1);
+  markDirty();
   renderSidebar();
 }
 
@@ -569,16 +686,19 @@ function addNote(index) {
   expandedWaypointSet.add(index);
   waypoints[index].notes = waypoints[index].notes || [];
   waypoints[index].notes.push('');
+  markDirty();
   renderSidebar();
 }
 
 function editNote(index, noteIndex, value) {
   waypoints[index].notes[noteIndex] = value;
+  markDirty();
 }
 
 function removeNote(index, noteIndex) {
   expandedWaypointSet.add(index);
   waypoints[index].notes.splice(noteIndex, 1);
+  markDirty();
   renderSidebar();
 }
 
@@ -635,6 +755,7 @@ function loadWaypoints(saved, savedSegmentModes) {
   segmentModes = Array.from({ length: needed }, (_, idx) => (cleanModes[idx] === 'hike' ? 'hike' : 'road'));
 
   waypointCounter = waypoints.length + 1;
+  markSaved();
   renderSidebar();
   updateRouting();
 }
@@ -663,6 +784,7 @@ async function saveRoute() {
   }
 
   document.getElementById('routeNameInput').value = data.route.name;
+  markSaved();
   setMessage(`Saved: ${data.route.name}`);
 }
 
@@ -700,6 +822,8 @@ async function loadRouteFromQuery() {
 }
 
 removeLegacyPlannerDuplicates();
+updateAutosaveStatus();
+document.getElementById('routeNameInput').addEventListener('input', markDirty);
 document.getElementById('gpxImportInput').addEventListener('change', async (event) => {
   const file = event.target.files && event.target.files[0];
   if (!file) return;

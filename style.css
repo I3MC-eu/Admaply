@@ -466,6 +466,17 @@ body {
   margin-bottom: 8px;
 }
 
+.planner-actions select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #11161b;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
 .planner-actions .secondary-btn {
   width: 100%;
   box-sizing: border-box;
